@@ -1,0 +1,30 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Environment / secrets
+.env
+
+# Personal background — NEVER pushed. Your real resume content lives here.
+# The committed `user_data.example/` is the template to copy from.
+/user_data/*
+!/user_data/.gitkeep
+
+# Runtime data (SQLite, FAISS, generated documents/resumes/cover letters, Excel).
+# All generated artifacts contain personal info and stay local.
+/data/
+!/data/.gitkeep
+
+# OS
+.DS_Store

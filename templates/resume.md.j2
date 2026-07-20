@@ -1,0 +1,23 @@
+{{ header }}
+
+## Summary
+
+{{ summary }}
+
+Targeting: **{{ title }}** at **{{ company }}**.
+
+## Experience
+
+{% for item in experience %}
+- {{ item }}
+{% endfor %}
+
+## Selected Projects
+
+{% for item in projects %}
+- {{ item }}
+{% endfor %}
+
+## Skills
+
+{{ skills | join(" · ") }}

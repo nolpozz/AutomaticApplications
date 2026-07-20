@@ -1,0 +1,21 @@
+# Optional YAML configuration. Copy to config/config.yaml to use it.
+# Precedence: environment variables > config/config.yaml > built-in defaults.
+# Every value here is optional; anything omitted falls back to the default.
+
+llm:
+  provider: mock            # openai | anthropic | gemini | ollama | vllm | mock
+  model: claude-opus-4-8
+  temperature: 0.2
+
+embedding:
+  provider: mock            # sentence-transformers | mock
+  backend: sqlite           # sqlite | faiss
+
+pipeline:
+  max_jobs: 50
+  classifier_threshold: 0.65
+  max_applications_per_day: 20
+  enabled_boards: [greenhouse, lever, ashby, yc]
+  auto_sync_excel: true
+
+log_level: INFO

@@ -1,0 +1,28 @@
+# Per-board scraper configuration. Anything left empty runs in offline "sample"
+# mode so the pipeline works with no network. Fill in real tokens to go live.
+#
+# Find the board token in a company's careers URL, e.g.:
+#   https://boards.greenhouse.io/<TOKEN>   ->   slugs: [<TOKEN>]
+#   https://jobs.lever.co/<TOKEN>          ->   slugs: [<TOKEN>]
+#   https://jobs.ashbyhq.com/<TOKEN>       ->   slugs: [<TOKEN>]
+sources:
+  greenhouse:
+    slugs: []          # e.g. ["stripe", "anthropic"]
+    extra: {}          # e.g. {company: "Stripe"}
+  lever:
+    slugs: []          # e.g. ["netflix"]
+  ashby:
+    slugs: []          # e.g. ["openai"]
+  workday:
+    extra:
+      targets: []      # [{host: "https://x.wd1.myworkdayjobs.com", tenant: "x", site: "careers", company: "X"}]
+  github:
+    slugs: []          # e.g. ["SimplifyJobs/New-Grad-Positions"]
+  company:
+    urls: []           # e.g. ["https://boards.greenhouse.io/acme"]
+  linkedin:
+    urls: []           # disabled by default (ToS); leave empty
+  wellfound:
+    slugs: []
+  yc:
+    slugs: []

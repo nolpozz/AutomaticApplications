@@ -1,0 +1,14 @@
+# Fixed test persona (ML/NLP engineer). Kept stable and independent of the
+# shipped `user_data.example/` so tests are deterministic. The classifier and
+# parser heuristics are tech-domain, so the test persona is too.
+name: Test Candidate
+email: test.candidate@example.com
+phone: "(555) 000-0000"
+location: Remote
+headline: Machine Learning Engineer — NLP
+summary: >
+  ML engineer with 3 years of experience building NLP and LLM systems in
+  production, including retrieval-augmented generation and model evaluation.
+motivation: I want to work on language systems that reach real users.
+links:
+  GitHub: https://example.com/test

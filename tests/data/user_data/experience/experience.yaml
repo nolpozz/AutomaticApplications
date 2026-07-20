@@ -1,0 +1,10 @@
+- title: Machine Learning Engineer, TestCorp (2023–present)
+  text: >
+    Built a retrieval-augmented QA service with a fine-tuned embedding model and
+    FAISS; owned the model evaluation harness used across teams.
+  tags: [python, pytorch, rag, faiss, nlp, llm]
+- title: Data Science Intern, TestCorp (2022)
+  text: >
+    Built a churn-prediction pipeline in Python and scikit-learn over 500k
+    records and automated weekly reporting with SQL.
+  tags: [python, sql, machine learning]

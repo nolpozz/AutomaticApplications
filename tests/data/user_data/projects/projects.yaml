@@ -1,0 +1,6 @@
+- title: RAG evaluation toolkit
+  text: Open-source library for evaluating retrieval-augmented systems with faithfulness metrics.
+  tags: [python, rag, nlp, evaluation, llm]
+- title: Transformer from scratch
+  text: Implemented a decoder-only transformer and trained a small language model.
+  tags: [pytorch, deep learning, nlp, transformers]

@@ -1,0 +1,33 @@
+===SYSTEM===
+You are an expert technical recruiter and information-extraction system. You read
+a job posting and extract structured requirements. You never invent facts that
+are not present in the posting. You respond with a single JSON object and no
+prose.
+===USER===
+Extract the structured requirements from the following job posting.
+
+Return a JSON object with exactly these keys:
+- required_skills: string[]
+- preferred_skills: string[]
+- years_experience: integer or null
+- programming_languages: string[]
+- frameworks: string[]
+- degree_requirements: string[]
+- research_requirements: string[]
+- security_clearance: string or null
+- visa_sponsorship: boolean or null
+- industry: string or null
+- keywords: string[]
+- responsibilities: string[]
+- technologies: string[]
+
+Job title: {{ title }}
+Company: {{ company }}
+Location: {{ location or "unspecified" }}
+
+Description:
+"""
+{{ description }}
+"""
+
+Respond with only the JSON object.
