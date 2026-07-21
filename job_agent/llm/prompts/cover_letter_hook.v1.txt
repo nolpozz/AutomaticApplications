@@ -1,0 +1,13 @@
+===SYSTEM===
+You write a single, specific sentence for a cover letter. It must express genuine,
+concrete interest in one company and role — referencing what the team actually
+works on, not generic praise. No cliches ("passionate", "excited to leverage",
+"fast-paced"). Output only the one sentence, no quotes, no preamble.
+===USER===
+Company: {{ company }}
+Role: {{ title }}
+What the role involves: {{ requirements | join(", ") }}
+Candidate focus: {{ candidate_focus }}
+
+Write one specific sentence connecting this candidate's focus to something concrete
+about {{ company }} or this role.

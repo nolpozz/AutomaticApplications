@@ -62,6 +62,30 @@ class StorageSettings(BaseSettings):
     prompts_path: Path = Path("./job_agent/llm/prompts")
 
 
+# Comprehensive default coverage of ML / AI research + engineering role titles.
+# Every search-based board (amazon, netflix, google, ...) searches each of these
+# unless a board overrides ``extra.queries``. This is the single place that
+# controls "which roles do we look for".
+DEFAULT_SEARCH_QUERIES = [
+    "machine learning engineer",
+    "machine learning intern",
+    "ai engineer",
+    "ai research",
+    "research scientist",
+    "research engineer",
+    "applied scientist",
+    "applied machine learning",
+    "deep learning",
+    "nlp engineer",
+    "large language models",
+    "generative ai",
+    "computer vision",
+    "ml infrastructure",
+    "ai research intern",
+    "data scientist",
+]
+
+
 class PipelineSettings(BaseSettings):
     max_jobs: int = 50
     classifier_threshold: float = 0.65
@@ -70,9 +94,25 @@ class PipelineSettings(BaseSettings):
     auto_sync_excel: bool = True
     dedup_similarity_threshold: float = 0.92
 
-    @field_validator("enabled_boards", mode="before")
+    # The role titles searched across all search-based boards.
+    search_queries: StrList = Field(default_factory=lambda: list(DEFAULT_SEARCH_QUERIES))
+
+    # Role targeting. When set, the classifier prefers roles matching these
+    # experience levels / keywords and penalizes clearly-mismatched roles (e.g.
+    # senior full-time roles when you only want internships). Empty = no targeting.
+    target_experience_levels: StrList = Field(default_factory=list)  # e.g. ["intern"]
+    target_keywords: StrList = Field(default_factory=list)  # e.g. ["intern", "internship"]
+    target_description: str = ""  # human phrase shown to the LLM, e.g. "Master's-level internships"
+
+    @field_validator(
+        "enabled_boards",
+        "search_queries",
+        "target_experience_levels",
+        "target_keywords",
+        mode="before",
+    )
     @classmethod
-    def _split_boards(cls, value: object) -> object:
+    def _split_csv(cls, value: object) -> object:
         if isinstance(value, str):
             return [item.strip() for item in value.split(",") if item.strip()]
         return value

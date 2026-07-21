@@ -1,61 +1,158 @@
 # job-agent
 
-An AI-powered pipeline that **discovers** software / ML / AI / NLP / data-science
-jobs, **decides** whether they fit your background, **generates** tailored resumes
-and cover letters, and **tracks** every application — architected like a product,
-not a pile of scripts.
+An AI-powered pipeline that **discovers** ML / AI research / AI engineering / NLP /
+data-science jobs, **decides** whether they fit your background, **generates**
+tailored resumes and cover letters, and **tracks** every application — architected
+like a product, not a pile of scripts.
 
-* **SQLite is the single source of truth.** Excel is a generated projection, never
-  read back.
-* **Every stage is resumable**, every artifact is stored, every LLM prompt is
-  versioned.
-* **Runs with zero API keys** out of the box (deterministic mock LLM + mock
-  embeddings). Add keys to switch on real providers — nothing else changes.
+* **SQLite is the single source of truth.** Excel is a generated projection, never read back.
+* **Every stage is resumable**, every artifact is stored, every LLM prompt is versioned.
+* **Runs with zero API keys** out of the box (deterministic mock LLM + mock embeddings).
+  Add an API key to switch on real generation — nothing else changes.
+* **Your personal data never leaves your machine** (`user_data/`, `data/`, `.env` are gitignored).
 
 ---
 
-## Quickstart
+## What's implemented
+
+**Job discovery (live scrapers).** A common abstract scraper interface with many
+concrete adapters, all emitting normalized `Job` objects and recording the real
+per-posting URL:
+
+| Source | Status | How it works |
+|---|---|---|
+| **GitHub aggregator repos** | ✅ live | Parses the big community internship lists (SimplifyJobs, speedyapply, vanshb03…) in both Markdown- and HTML-table formats; extracts the direct posting URL from each "Apply" badge, handles `↳` company continuation, skips closed roles |
+| **Amazon** | ✅ live | `amazon.jobs` search JSON API |
+| **Netflix** | ✅ live | Eightfold public API (`canonicalPositionUrl`) |
+| **Google** | ✅ live | Careers results page → per-job `og:title` |
+| **Spotify** | ✅ live | Scrapes `engineering.atspotify.com/jobs` posting links |
+| **Greenhouse / Lever / Ashby** | ✅ live | Public board APIs (e.g. Anthropic, OpenAI) |
+| **Workday** | ✅ live | CxS JSON API (e.g. NVIDIA) |
+| **YC / Wellfound / LinkedIn** | ⚠️ sample | No free public API / ToS-restricted; sample data by default |
+| **Company career pages** | ⚠️ partial | Auto-delegates to Greenhouse/Lever/Ashby when detected |
+
+**Centralized ML/AI search.** One `search_queries` list (covering ML engineer, AI
+research, research scientist, applied scientist, NLP, LLMs, computer vision, deep
+learning, MLOps, internships, …) drives every search-based board, so the full
+ML/AI research + engineering role space is searched from one place.
+
+**LLM layer.** Provider abstraction over **OpenAI (default)**, Anthropic, Gemini,
+Ollama/vLLM, and a deterministic **mock**. Every AI component supplies a
+deterministic fallback, so the pipeline runs and tests reproducibly with no keys,
+and real-provider parse failures degrade gracefully. Prompts are versioned files.
+
+**LLM-based parsing & reproducible classifier.** Extracts structured requirements
+from each posting; scores fit across technical / experience / education / research /
+interest with an overall score, recommendation, and reasons. Supports **role
+targeting** (e.g. prioritize Master's-level internships, down-weight senior
+full-time roles).
+
+**Retrieval + tailored documents.** Embeddings (mock hashed or
+sentence-transformers) over your knowledge base with SQLite/FAISS vector search;
+job-conditioned retrieval passes only relevant, real material to the generators.
+Resumes and cover letters are produced in Markdown (+ DOCX/PDF with the extra),
+never inventing experience.
+
+**Narrative-block cover letters.** Assembles cover letters from your own tagged,
+pre-written paragraphs — picking one opening, the best-matching body blocks, and a
+closing for each job — with the single company-specific hook sentence written fresh
+by the LLM every time.
+
+**Orchestration & tracking.** A resumable state-machine pipeline (per-job commits);
+an application tracker for the human-in-the-loop review → approve → submit → outcome
+flow with a daily-submission cap; deduplication across URL, company/title, and
+semantics.
+
+**Surfaces.** A typer CLI, a local FastAPI dashboard (search / filter / charts), an
+auto-synced Excel workbook (colored by stage, frozen headers, autofilter), analytics,
+and rotating structured logs. Full test suite (**68 tests**), `ruff` / `black` /
+`mypy` clean, GitHub Actions CI on Python 3.10–3.12.
+
+---
+
+## Download & install
 
 ```bash
-# 1. Install (core deps only — the pipeline is fully runnable with just these)
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .            # exposes the `job-agent` command
+git clone https://github.com/nolpozz/AutomaticApplications.git
+cd AutomaticApplications
 
-# 2. (optional) configure — defaults work out of the box
+python -m venv .venv && source .venv/bin/activate      # Python 3.10+ (targets 3.12)
+
+pip install -r requirements.txt   # core deps — pipeline is fully runnable with just these
+pip install -e .                  # exposes the `job-agent` command
+```
+
+Optional capability bundles:
+
+```bash
+pip install -e ".[providers]"     # OpenAI / Anthropic / Gemini SDKs (real generation)
+pip install -e ".[documents]"     # DOCX + PDF output
+pip install -e ".[embeddings]"    # real semantic embeddings (sentence-transformers, FAISS)
+pip install -e ".[dashboard]"     # FastAPI web dashboard
+pip install -e ".[dev]"           # pytest, ruff, black, mypy, pre-commit
+pip install -e ".[all]"           # everything above
+```
+
+---
+
+## Use it
+
+### 1. Add your background (private)
+
+```bash
+scripts/seed_user_data.sh          # copies the sample persona into user_data/
+$EDITOR user_data/profile.yaml     # then edit the category folders with your own info
+```
+
+`user_data/` is gitignored — your real résumé content is never committed. See
+`user_data.example/` for the expected shape (Markdown/YAML across `experience/`,
+`projects/`, `education/`, `skills/`, `publications/`, `resume_bullets/`,
+`cover_letter_examples/`, and an optional `narrative_blocks.md`).
+
+### 2. Try it offline (no keys)
+
+```bash
+job-agent pipeline                 # scrape → parse → classify → tailor (mock LLM, sample jobs)
+job-agent review                   # ranked queue with fit scores
+job-agent stats                    # analytics
+open data/job_agent.xlsx           # the synced workbook
+```
+
+Generated résumés/cover letters land in `data/documents/`.
+
+### 3. Go live (real models + real jobs)
+
+```bash
 cp .env.example .env
-
-# 3. Put your background in user_data/ (sample data ships so you can run now)
-
-# 4. Run the whole pipeline end-to-end (offline sample data, mock LLM)
-job-agent pipeline
-
-# 5. See what it produced
-job-agent review          # jobs awaiting your review, with fit scores
-job-agent stats           # analytics
-open data/job_agent.xlsx  # the synced workbook
 ```
 
-Generated resumes and cover letters land in `data/documents/`. The full run
-touches no network and needs no credentials.
-
-### Turn on real models / boards
-
-```bash
+```ini
 # .env
-JOB_AGENT_LLM__PROVIDER=anthropic
-JOB_AGENT_LLM__MODEL=claude-opus-4-8
-ANTHROPIC_API_KEY=sk-ant-...
-
-JOB_AGENT_EMBEDDING__PROVIDER=sentence-transformers   # needs the 'embeddings' extra
+JOB_AGENT_LLM__PROVIDER=openai
+JOB_AGENT_LLM__MODEL=gpt-4o
+OPENAI_API_KEY=sk-...
 ```
+
+Review/edit the job sources in **`config/sources.yaml`** (board tokens for
+Greenhouse/Lever/Ashby; FAANG search boards work out of the box), then:
 
 ```bash
-pip install -e ".[all]"   # real embeddings, DOCX/PDF, provider SDKs, dashboard
+job-agent pipeline --no-offline    # hit real boards and a real model
 ```
 
-Configure real job boards in `config/sources.yaml` (add a Greenhouse/Lever/Ashby
-board token), then `job-agent pipeline --no-offline`.
+### 4. Apply and track
+
+```bash
+job-agent review
+# open the generated résumé + cover letter in data/documents/, read/edit them
+job-agent approve <job_id>
+#   → submit on the company's site yourself (uploading the generated docs)
+job-agent submit  <job_id>         # records it; enforces the daily cap
+job-agent outcome <job_id> interview   # later, as you hear back
+```
+
+> The tool **prepares and tracks** applications; it does not auto-fill employer
+> forms (see the roadmap). Always read a generated document before sending it.
 
 ---
 
@@ -63,19 +160,18 @@ board token), then `job-agent pipeline --no-offline`.
 
 | Command | What it does |
 |---|---|
-| `job-agent pipeline` | Run the full automated flow: scrape → parse → embed → classify → resume → cover letter |
-| `job-agent scrape` | Discover jobs from enabled boards |
-| `job-agent parse` / `embed` / `classify` | Run a single stage over pending jobs |
-| `job-agent generate-resume` / `generate-cover-letter` | Generate documents for eligible jobs |
+| `job-agent pipeline [--no-offline]` | Full flow: scrape → parse → embed → classify → resume → cover letter |
+| `job-agent scrape / parse / embed / classify` | Run a single stage over pending jobs |
+| `job-agent generate-resume / generate-cover-letter` | Generate documents for eligible jobs |
 | `job-agent review [--state STATE]` | List jobs at a stage (default: awaiting review) |
-| `job-agent approve/submit/outcome <job_id>` | Move an application through review → submitted → outcome |
+| `job-agent approve / submit / outcome <job_id>` | Move an application through its lifecycle |
 | `job-agent sync-excel` | Rebuild the Excel workbook from SQLite |
 | `job-agent stats` | Print analytics |
 | `job-agent dashboard` | Launch the local web dashboard (needs the `dashboard` extra) |
 | `job-agent boards` | List available job boards |
 
-Every automated stage is resumable — re-running only processes jobs that still
-need that stage, and a job that fails a stage stays put and is retried next run.
+Automated stages are resumable — re-running only processes jobs that still need
+that stage; a job that fails a stage stays put and is retried next run.
 
 ---
 
@@ -93,39 +189,43 @@ need that stage, and a job that fails a stage stays put and is retried next run.
                               Excel sync · Analytics · Dashboard · Tracker
 ```
 
-The **LLM layer** is a provider abstraction (OpenAI / Anthropic / Gemini / Ollama /
-mock). Each AI component supplies a *deterministic fallback*, so mock-mode and
-tests are reproducible and real-provider parse failures degrade gracefully.
-
 See [`docs/architecture.md`](docs/architecture.md) for the full design,
-[`docs/setup.md`](docs/setup.md) to get running, [`docs/extending.md`](docs/extending.md)
-to add a board/provider/prompt, and [`docs/troubleshooting.md`](docs/troubleshooting.md).
+[`docs/setup.md`](docs/setup.md) for configuration,
+[`docs/extending.md`](docs/extending.md) to add a board/provider/prompt, and
+[`docs/troubleshooting.md`](docs/troubleshooting.md).
 
 ---
 
-## Your data lives in `user_data/` (private, never pushed)
+## Privacy
 
-No resume content is hardcoded anywhere. The agent knows only what you put here:
+Nothing personal is ever pushed to GitHub:
 
-```
-user_data/                # gitignored — your real background, never committed
-  profile.yaml            # name, contact, headline, summary, motivation
-  experience/  projects/  education/  skills/  awards/
-  coursework/  certifications/  publications/
-  resume_bullets/  cover_letter_examples/
-```
+* `user_data/` — your real background — is gitignored (only the fictional
+  `user_data.example/` template is tracked).
+* `data/` — generated résumés, cover letters, the SQLite DB, and Excel — is gitignored.
+* `.env` — API keys — is gitignored.
 
-Files are Markdown or YAML. A safe, fictional sample ships as **`user_data.example/`**
-(committed). Seed your private copy from it, then edit:
+---
 
-```bash
-scripts/seed_user_data.sh      # copies user_data.example/ -> user_data/
-```
+## Roadmap — future features needed
 
-**Nothing personal is ever pushed to GitHub.** `user_data/` (your background),
-`data/` (the generated résumés, cover letters, SQLite DB, and Excel), and `.env`
-(API keys) are all gitignored. Only the fictional `user_data.example/` template is
-tracked.
+* **Automated submission (Playwright).** Drive employer application forms end-to-end,
+  consuming the stored résumé/cover-letter files. The tracker's `submit` step and the
+  `Job.url` are already in place as the integration point.
+* **More live board adapters.** Meta, Apple, and Microsoft run custom career sites
+  with no clean public API and currently need per-site adapters (their roles do show
+  up via the GitHub aggregators). Add LinkedIn via an authorized API.
+* **Email automation & recruiter tracking.** Detect responses, log recruiter threads,
+  and update application state from your inbox.
+* **Interview scheduling** hooked to the `applications` table and outcomes.
+* **Salary prediction & company scoring** (fields already reserved: `companies.score`).
+* **Résumé A/B testing** using the first-class version history (`resume_versions`).
+* **Learning from outcomes.** Feed recorded interview/offer results and response times
+  back into classifier calibration.
+* **Richer dashboard.** Editable notes, one-click approve/submit, and document preview.
+* **Multi-user / cloud deployment.** The repository is the only DB touchpoint; add a
+  tenant key and swap SQLite for Postgres.
+* **Fine-tuned classifier** to replace the heuristic/LLM scorer over time.
 
 ---
 
@@ -133,14 +233,14 @@ tracked.
 
 ```bash
 pip install -e ".[dev]"
-pytest                 # unit + integration tests
+pytest                       # unit + integration tests
 ruff check job_agent tests
 black --check job_agent tests
 mypy job_agent
-pre-commit install     # run the above automatically on commit
+pre-commit install           # run the above automatically on commit
 ```
 
-The project targets Python 3.12 and supports 3.10+.
+Targets Python 3.12; supports 3.10+.
 
 ## License
 

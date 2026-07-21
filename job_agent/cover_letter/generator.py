@@ -1,8 +1,16 @@
 """Cover-letter generator.
 
-Mirrors the resume generator: LLM path with strict anti-hallucination / anti-
-cliche rules, and a deterministic Jinja fallback drawing on the same real
-material and the user's writing samples. Supports multiple templates.
+Two modes:
+
+* **Narrative-block assembly** (preferred, when the user supplies narrative
+  blocks): the letter is assembled from the user's own pre-written, tagged
+  paragraphs, with only the one company-specific ``{{HOOK}}`` sentence written
+  fresh by the LLM. This follows the user's cover-letter "system" exactly.
+* **Free generation** (fallback, when no blocks are configured): LLM writes the
+  body under strict anti-cliche / anti-hallucination rules, with a deterministic
+  template fallback.
+
+Supports multiple templates (header/greeting/signoff wrapping).
 """
 
 from __future__ import annotations
@@ -13,6 +21,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 from job_agent.config.logging import get_logger
+from job_agent.cover_letter.blocks import NarrativeBlock, assemble, derive_job_tags
 from job_agent.documents.render import DocumentRenderer
 from job_agent.knowledge.loader import KnowledgeBase, Profile
 from job_agent.llm.base import LLMProvider
@@ -31,11 +40,13 @@ class CoverLetterGenerator:
         templates_dir: Path | str,
         *,
         template_name: str = "cover_letter.md.j2",
+        blocks: list[NarrativeBlock] | None = None,
     ) -> None:
         self.llm = llm
         self.prompts = prompts
         self.renderer = renderer
         self.template_name = template_name
+        self.blocks = blocks or []
         self._env = Environment(
             loader=FileSystemLoader(str(templates_dir)),
             autoescape=select_autoescape(enabled_extensions=()),
@@ -68,12 +79,16 @@ class CoverLetterGenerator:
             date=_today(),
         )
 
-        rendered = self.prompts.render("cover_letter", **context)
-        body = self.llm.complete_text(
-            rendered.messages(), fallback=lambda: self._render_body(context)
-        ).strip()
-        if not body:
-            body = self._render_body(context)
+        if self.blocks:
+            body, prompt_version = self._assemble_from_blocks(job, parsed, profile, context)
+        else:
+            rendered = self.prompts.render("cover_letter", **context)
+            body = self.llm.complete_text(
+                rendered.messages(), fallback=lambda: self._render_body(context)
+            ).strip()
+            if not body:
+                body = self._render_body(context)
+            prompt_version = rendered.version
 
         # Wrap the letter body in the chosen template (header/greeting/signoff).
         markdown = self._wrap(template_name or self.template_name, context, body)
@@ -85,8 +100,41 @@ class CoverLetterGenerator:
             kind="cover_letter",
             markdown=markdown,
             paths=paths,
-            prompt_version=rendered.version,
+            prompt_version=prompt_version,
         )
+
+    def _assemble_from_blocks(
+        self, job: Job, parsed: ParsedJob, profile: Profile, context: dict
+    ) -> tuple[str, str]:
+        job_tags = derive_job_tags(job, parsed)
+        hook = self._write_hook(job, parsed, profile)
+        body = assemble(self.blocks, job_tags, company=job.company, role=job.title, hook=hook)
+        logger.info(
+            "Assembled cover letter from narrative blocks (tags: %s)", ", ".join(sorted(job_tags))
+        )
+        return body, "cover_letter_blocks.v1"
+
+    def _write_hook(self, job: Job, parsed: ParsedJob, profile: Profile) -> str:
+        """Write the single company-specific hook sentence (fresh every time)."""
+        focus = profile.headline or profile.summary[:200]
+        rendered = self.prompts.render(
+            "cover_letter_hook",
+            company=job.company,
+            title=job.title,
+            requirements=(parsed.required_skills[:6] or parsed.keywords[:6]),
+            candidate_focus=focus,
+        )
+
+        def _fallback() -> str:
+            reqs = ", ".join(parsed.required_skills[:3] or parsed.keywords[:3]) or "this work"
+            return (
+                f"The work at {job.company} on {reqs} lines up closely with where I've "
+                f"chosen to focus, which is why this role stood out to me."
+            )
+
+        hook = self.llm.complete_text(rendered.messages(), fallback=_fallback).strip()
+        # Keep it to a single clean sentence.
+        return hook.split("\n")[0].strip().strip('"')
 
     def _render_body(self, context: dict) -> str:
         # Deterministic, cliche-free body assembled from real material.

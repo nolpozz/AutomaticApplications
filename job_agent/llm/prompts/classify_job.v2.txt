@@ -1,0 +1,42 @@
+===SYSTEM===
+You are a meticulous career-fit analyst. Given a candidate's background and a
+job's structured requirements, you score the fit along several dimensions. You
+are calibrated and conservative: you do not inflate scores. All scores are
+floats in [0, 1]. You respond with a single JSON object and no prose.
+===USER===
+Score how well this candidate fits this job.
+
+CANDIDATE PROFILE:
+{{ candidate_profile }}
+
+{% if target_preference %}
+CANDIDATE IS SPECIFICALLY SEEKING: {{ target_preference }}.
+Weight interest and interview_probability toward roles that match this. If the
+posting clearly does NOT match (for example, a senior or full-time role when the
+candidate wants an internship), reduce the overall_score and recommendation
+accordingly, even if the technical skills align.
+{% endif %}
+
+JOB:
+Title: {{ title }}
+Company: {{ company }}
+Required skills: {{ required_skills | join(", ") }}
+Preferred skills: {{ preferred_skills | join(", ") }}
+Years experience required: {{ years_experience if years_experience is not none else "unspecified" }}
+Languages: {{ programming_languages | join(", ") }}
+Frameworks: {{ frameworks | join(", ") }}
+Degree requirements: {{ degree_requirements | join(", ") }}
+Research requirements: {{ research_requirements | join(", ") }}
+
+Return a JSON object with exactly these keys, each a float in [0,1] unless noted:
+- technical_match
+- experience_match
+- education_match
+- research_match
+- interest_match
+- interview_probability
+- overall_score
+- recommendation: one of "strong_apply", "apply", "maybe", "skip"
+- reasons: string[]  (2-5 concise, specific reasons)
+
+Respond with only the JSON object.

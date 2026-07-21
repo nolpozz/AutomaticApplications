@@ -18,6 +18,7 @@ from job_agent.analytics.analytics import Analytics, Stats
 from job_agent.classifier.classifier import JobClassifier
 from job_agent.config.logging import get_logger
 from job_agent.config.settings import Settings, get_settings
+from job_agent.cover_letter.blocks import load_blocks
 from job_agent.cover_letter.generator import CoverLetterGenerator
 from job_agent.database.base import Database
 from job_agent.database.models import JobRecord
@@ -96,6 +97,10 @@ class Pipeline:
         self.prompts = get_prompt_registry(self.settings.storage.prompts_path)
         self.renderer = DocumentRenderer(self.settings.storage.documents_path)
         self.formats = formats or ["md", "docx", "pdf"]
+        # Load the user's narrative blocks for cover-letter assembly (optional).
+        self.cover_blocks = load_blocks(
+            self.settings.storage.user_data_path / "narrative_blocks.md"
+        )
 
     # -- context ------------------------------------------------------------
     def context(self, session: Session) -> PipelineContext:
@@ -109,9 +114,18 @@ class Pipeline:
             embeddings=emb,
             retriever=Retriever(emb, self.kb),
             parser=JobParser(self.llm, self.prompts),
-            classifier=JobClassifier(self.llm, self.prompts, self.kb),
+            classifier=JobClassifier(
+                self.llm,
+                self.prompts,
+                self.kb,
+                target_levels=self.settings.pipeline.target_experience_levels,
+                target_keywords=self.settings.pipeline.target_keywords,
+                target_description=self.settings.pipeline.target_description,
+            ),
             resume=ResumeGenerator(self.llm, self.prompts, self.renderer, templates),
-            cover=CoverLetterGenerator(self.llm, self.prompts, self.renderer, templates),
+            cover=CoverLetterGenerator(
+                self.llm, self.prompts, self.renderer, templates, blocks=self.cover_blocks
+            ),
             dedupe=DuplicateDetector(
                 repo, emb, similarity_threshold=self.settings.pipeline.dedup_similarity_threshold
             ),

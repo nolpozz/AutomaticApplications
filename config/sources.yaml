@@ -1,28 +1,73 @@
-# Per-board scraper configuration. Anything left empty runs in offline "sample"
-# mode so the pipeline works with no network. Fill in real tokens to go live.
+# =============================================================================
+# JOB SOURCE CONFIGURATION  —  review and edit this file to control where jobs
+# come from. Run live with:  job-agent pipeline --no-offline
+# (Without --no-offline, or with no targets configured, boards emit sample data.)
 #
-# Find the board token in a company's careers URL, e.g.:
-#   https://boards.greenhouse.io/<TOKEN>   ->   slugs: [<TOKEN>]
-#   https://jobs.lever.co/<TOKEN>          ->   slugs: [<TOKEN>]
-#   https://jobs.ashbyhq.com/<TOKEN>       ->   slugs: [<TOKEN>]
+# SCRAPABILITY LEGEND:
+#   [LIVE]    Public API supported out of the box — fetches real jobs now.
+#   [WORKDAY] Supported via the workday board with host/tenant/site config.
+#   [CUSTOM]  Company runs its own careers site with no usable public API.
+#             Listed for review; needs a per-site adapter (docs/extending.md).
+#
+# For search-based boards (amazon, spotify, netflix, google), `extra.queries`
+# controls what is searched and `extra.location` optionally filters by place.
+# =============================================================================
 sources:
+
+  # --- AI labs on supported ATS platforms [LIVE] -----------------------------
   greenhouse:
-    slugs: []          # e.g. ["stripe", "anthropic"]
-    extra: {}          # e.g. {company: "Stripe"}
-  lever:
-    slugs: []          # e.g. ["netflix"]
+    slugs:
+      - anthropic          # boards.greenhouse.io/anthropic
+    extra: {}
   ashby:
-    slugs: []          # e.g. ["openai"]
+    slugs:
+      - openai             # jobs.ashbyhq.com/openai
+  lever:
+    slugs: []              # e.g. ["huggingface"]
+
+  # --- GitHub aggregator repos [LIVE] — highest-signal internship source -----
+  # Bots update these constantly with direct posting URLs. Verified active.
+  github:
+    slugs:
+      - speedyapply/2026-AI-College-Jobs        # AI/ML roles (best fit)
+      - SimplifyJobs/Summer2026-Internships     # the canonical SWE internship list
+      - vanshb03/Summer2026-Internships         # active community list
+      - speedyapply/2026-SWE-College-Jobs       # SWE new-grad + intern
+      # - SimplifyJobs/New-Grad-Positions       # new-grad (add if wanted)
+
+  # --- FAANG+ with dedicated adapters [LIVE] ---------------------------------
+  # These inherit the centralized ML/AI search queries
+  # (JOB_AGENT_PIPELINE__SEARCH_QUERIES / DEFAULT_SEARCH_QUERIES) automatically.
+  # Override per board with `extra.queries: [...]` only if you want something
+  # different. They go live with `job-agent pipeline --no-offline`.
+  amazon: {}            # + optional extra.country: "US"
+  spotify: {}           # scrapes engineering.atspotify.com/jobs (queries N/A)
+  netflix: {}
+  google: {}            # note: 1 request per job to read titles — keep max_jobs modest
+
+  # --- NVIDIA on Workday [WORKDAY] -------------------------------------------
   workday:
     extra:
-      targets: []      # [{host: "https://x.wd1.myworkdayjobs.com", tenant: "x", site: "careers", company: "X"}]
-  github:
-    slugs: []          # e.g. ["SimplifyJobs/New-Grad-Positions"]
+      targets:
+        - host: https://nvidia.wd5.myworkdayjobs.com
+          tenant: nvidia
+          site: NVIDIAExternalCareerSite
+          company: NVIDIA
+
+  # --- FAANG+ without a public API [CUSTOM] ----------------------------------
+  # Career pages listed for your review. These run custom sites; the `company`
+  # scraper only auto-fetches Greenhouse/Lever/Ashby hosts, so these currently
+  # return no live jobs until a per-site adapter is added.
   company:
-    urls: []           # e.g. ["https://boards.greenhouse.io/acme"]
-  linkedin:
-    urls: []           # disabled by default (ToS); leave empty
-  wellfound:
-    slugs: []
+    urls:
+      - https://www.metacareers.com/jobs                          # Meta      [CUSTOM]
+      - https://jobs.apple.com/en-us/search                       # Apple     [CUSTOM]
+      - https://jobs.careers.microsoft.com/global/en/search       # Microsoft [CUSTOM]
+
+  # --- Startup boards --------------------------------------------------------
   yc:
     slugs: []
+  wellfound:
+    slugs: []
+  linkedin:
+    urls: []              # disabled by default (ToS); leave empty

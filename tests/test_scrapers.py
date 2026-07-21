@@ -30,3 +30,34 @@ def test_max_jobs_cap_is_respected() -> None:
 
     cfg = ScraperConfig(source="greenhouse", offline=True, max_jobs=1)
     assert len(GreenhouseScraper(cfg).fetch()) == 1
+
+
+def test_search_boards_inherit_centralized_queries(settings, tmp_path) -> None:
+    # No sources file -> search boards still go live-capable and inherit queries.
+    from job_agent.scrapers.registry import build_scrapers
+
+    settings.pipeline.search_queries = ["machine learning engineer", "ai research"]
+    scrapers = build_scrapers(
+        settings, only=["amazon", "google", "netflix"], sources_file=tmp_path / "none.yaml"
+    )
+    for sc in scrapers:
+        assert sc.config.extra["queries"] == ["machine learning engineer", "ai research"]
+        assert sc._queries() == ["machine learning engineer", "ai research"]
+        assert sc.config.offline is False  # search boards are live-capable by default
+
+
+def test_default_search_queries_cover_ml_ai_roles() -> None:
+    from job_agent.config.settings import DEFAULT_SEARCH_QUERIES
+
+    joined = " ".join(DEFAULT_SEARCH_QUERIES).lower()
+    for term in [
+        "machine learning",
+        "ai research",
+        "research scientist",
+        "applied scientist",
+        "nlp",
+        "large language models",
+        "computer vision",
+        "deep learning",
+    ]:
+        assert term in joined

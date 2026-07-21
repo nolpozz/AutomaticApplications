@@ -30,7 +30,16 @@ _WEIGHTS = {
 
 
 class JobClassifier:
-    def __init__(self, llm: LLMProvider, prompts: PromptRegistry, knowledge: KnowledgeBase) -> None:
+    def __init__(
+        self,
+        llm: LLMProvider,
+        prompts: PromptRegistry,
+        knowledge: KnowledgeBase,
+        *,
+        target_levels: list[str] | None = None,
+        target_keywords: list[str] | None = None,
+        target_description: str = "",
+    ) -> None:
         self.llm = llm
         self.prompts = prompts
         self.knowledge = knowledge
@@ -39,6 +48,9 @@ class JobClassifier:
         self._years = _candidate_years(knowledge)
         self._degree = _candidate_degree_rank(knowledge)
         self._has_research = bool(knowledge.by_category("research"))
+        self._target_levels = {t.lower() for t in (target_levels or [])}
+        self._target_keywords = {t.lower() for t in (target_keywords or [])}
+        self._target_description = target_description.strip()
 
     def classify(self, job: Job, parsed: ParsedJob) -> tuple[ClassifierScore, str]:
         rendered = self.prompts.render(
@@ -53,12 +65,39 @@ class JobClassifier:
             frameworks=parsed.frameworks,
             degree_requirements=parsed.degree_requirements,
             research_requirements=parsed.research_requirements,
+            target_preference=self._target_preference(),
         )
         data = self.llm.complete_json(
             rendered.messages(), fallback=lambda: self._heuristic(job, parsed), temperature=0.0
         )
         score = _coerce(data, self, job, parsed)
         return score, rendered.version
+
+    def _target_preference(self) -> str:
+        if self._target_description:
+            return self._target_description
+        if self._target_levels or self._target_keywords:
+            bits = sorted(self._target_levels | self._target_keywords)
+            return "roles matching: " + ", ".join(bits)
+        return ""
+
+    def _level_factor(self, job: Job, parsed: ParsedJob) -> float:
+        """Multiplier in (0,1] that prefers target roles and penalizes mismatches."""
+        if not self._target_levels and not self._target_keywords:
+            return 1.0
+        level = (
+            job.experience_level.value
+            if hasattr(job.experience_level, "value")
+            else str(job.experience_level)
+        )
+        haystack = f"{job.title} {job.description}".lower()
+        matches = level in self._target_levels or any(k in haystack for k in self._target_keywords)
+        if matches:
+            return 1.0
+        # Clearly-mismatched senior/staff roles are pushed well below threshold.
+        if level in {"senior", "staff"}:
+            return 0.6
+        return 0.82  # mid/entry/unknown: mild penalty so target roles rank higher
 
     def _heuristic(self, job: Job, parsed: ParsedJob) -> dict[str, Any]:
         required = _normalize(
@@ -107,9 +146,14 @@ class JobClassifier:
             + _WEIGHTS["research"] * research
             + _WEIGHTS["interest"] * interest
         )
+        # Apply role-targeting preference (e.g. internships only).
+        level_factor = self._level_factor(job, parsed)
+        overall *= level_factor
         interview = round(overall * 0.6, 4)
 
         reasons = _reasons(required, self._vocab, self._blob, parsed, self._years)
+        if level_factor < 1.0:
+            reasons.append(f"Off-target role for {self._target_preference()} (down-weighted)")
         return {
             "technical_match": round(technical, 4),
             "experience_match": round(experience, 4),

@@ -88,9 +88,32 @@ class AbstractScraper(abc.ABC):
     def _client(self) -> httpx.Client:
         return httpx.Client(
             timeout=self.config.timeout_seconds,
-            headers={"User-Agent": "job-agent/0.1 (+https://example.com)"},
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; job-agent/0.1; +https://example.com)",
+                "Accept": "application/json, text/html;q=0.9, */*;q=0.8",
+                # Disable compression: reusing one client for many sequential
+                # requests can trigger httpx's "cannot use a decompressobj
+                # multiple times" error on some servers (e.g. amazon.jobs).
+                "Accept-Encoding": "identity",
+            },
             follow_redirects=True,
         )
+
+    def _queries(self) -> list[str]:
+        """Search terms for search-based boards. Configured via ``extra.queries``.
+
+        Defaults to a single empty query (i.e. "all jobs") when unset.
+        """
+        q = self.config.extra.get("queries")
+        if isinstance(q, list) and q:
+            return [str(x) for x in q]
+        if isinstance(q, str) and q.strip():
+            return [q]
+        return [""]
+
+    def _search_location(self) -> str | None:
+        loc = self.config.extra.get("location")
+        return str(loc) if loc else None
 
     def _job(
         self,
@@ -117,7 +140,11 @@ class AbstractScraper(abc.ABC):
             salary=salary,
             remote=remote or infer_remote(f"{title} {location or ''} {description}"),
             employment_type=employment_type,
-            experience_level=experience_level or infer_level(title),
+            experience_level=(
+                infer_level(title)
+                if experience_level == ExperienceLevel.UNKNOWN
+                else experience_level
+            ),
             external_id=external_id or url,
             date_posted=date_posted,
             source=self.source,
