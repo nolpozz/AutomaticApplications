@@ -112,13 +112,15 @@ $EDITOR user_data/profile.yaml     # then edit the category folders with your ow
 ### 2. Try it offline (no keys)
 
 ```bash
-job-agent pipeline                 # scrape → parse → classify → tailor (mock LLM, sample jobs)
+job-agent pipeline                 # offline by default: mock LLM + sample jobs, no keys/cost
 job-agent review                   # ranked queue with fit scores
 job-agent stats                    # analytics
 open data/job_agent.xlsx           # the synced workbook
 ```
 
-Generated résumés/cover letters land in `data/documents/`.
+Generated résumés/cover letters land in `data/documents/`. `job-agent pipeline`
+defaults to `--offline` (deterministic sample data); add `--no-offline` to hit
+real boards.
 
 ### 3. Go live (real models + real jobs)
 
@@ -142,17 +144,37 @@ job-agent pipeline --no-offline    # hit real boards and a real model
 
 ### 4. Apply and track
 
-```bash
-job-agent review
-# open the generated résumé + cover letter in data/documents/, read/edit them
-job-agent approve <job_id>
-#   → submit on the company's site yourself (uploading the generated docs)
-job-agent submit  <job_id>         # records it; enforces the daily cap
-job-agent outcome <job_id> interview   # later, as you hear back
-```
+**What a run produces.** After `job-agent pipeline --no-offline`, every discovered
+job is embedded and ranked, then only the **top 5 most-relevant roles per company**
+(`PIPELINE__TOP_PER_COMPANY=5`; the rest are marked `DEPRIORITIZED` and skipped)
+advance to the expensive stages. Those survivors are parsed and classified, and the
+classifier **rejects** anything below `PIPELINE__CLASSIFIER_THRESHOLD` (e.g. a senior
+full-time role that slipped through ranking). **Only the roles that pass classification
+get a tailored résumé + cover letter** — so you end up with *up to* 5 prepared
+applications per company, minus whatever the classifier drops, waiting in
+`data/documents/`.
 
-> The tool **prepares and tracks** applications; it does not auto-fill employer
-> forms (see the roadmap). Always read a generated document before sending it.
+**The apply loop is human-in-the-loop — the tool prepares and tracks; you submit.**
+None of the commands below touch an employer's website; they move a job through its
+lifecycle in your local database so nothing gets lost and you stay under your daily cap.
+
+```bash
+job-agent review                   # your worklist: jobs in READY_FOR_REVIEW with
+                                   #   fit score, recommendation, and doc versions.
+                                   #   Read-only. Same data as the Excel Jobs sheet
+                                   #   (which also has the posting URL + relevance).
+                                   #   Try --state DEPRIORITIZED or --state REJECTED
+                                   #   to see what got capped or dropped.
+```
+For each job you want to pursue:
+1. Open its tailored `data/documents/<company>-<role>-<id>.{pdf,docx,md}` and **read/edit** them.
+2. `job-agent approve <job_id>` — your "yes, applying to this" gate (`READY_FOR_REVIEW → APPROVED`; optional `--note`).
+3. Go to the posting **URL**, fill out the application, and upload the generated docs — **the only manual web step.**
+4. `job-agent submit <job_id>` — logs the submission (`APPROVED → SUBMITTED`), timestamps it, enforces `MAX_APPLICATIONS_PER_DAY`.
+5. `job-agent outcome <job_id> interview` — later, as you hear back, for your analytics.
+
+> The tool does **not** auto-fill employer forms (see the roadmap). Always read a
+> generated document before sending it.
 
 ---
 
