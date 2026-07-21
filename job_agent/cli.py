@@ -59,7 +59,7 @@ def pipeline(
     resume_after_failure: bool = typer.Option(True, help="Continue past per-job failures."),
     formats: str | None = typer.Option(None, help="Doc formats, e.g. 'md,docx,pdf'."),
 ) -> None:
-    """Run the full automated pipeline: scrape → parse → embed → classify → docs."""
+    """Run the full pipeline: scrape → embed → rank → parse → classify → docs."""
     report = _pipeline(formats).run(
         boards=_parse_list(boards),
         offline=offline if offline else None,
@@ -80,19 +80,19 @@ def scrape(
 
 @app.command()
 def parse(resume_after_failure: bool = typer.Option(True)) -> None:
-    """Parse requirements from all discovered jobs."""
+    """Parse requirements from surviving (top-per-company) embedded jobs."""
     _print_report("Parse", _pipeline().parse_pending())
 
 
 @app.command()
 def embed(resume_after_failure: bool = typer.Option(True)) -> None:
-    """Compute embeddings for all parsed jobs."""
+    """Embed all discovered jobs, then rank and cap to top-N per company."""
     _print_report("Embed", _pipeline().embed_pending())
 
 
 @app.command()
 def classify(resume_after_failure: bool = typer.Option(True)) -> None:
-    """Classify all embedded jobs and route them for review or rejection."""
+    """Classify all parsed jobs and route them for review or rejection."""
     _print_report("Classify", _pipeline().classify_pending())
 
 

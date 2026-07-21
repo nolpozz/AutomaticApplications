@@ -81,6 +81,14 @@ class SentenceTransformerEmbedding(EmbeddingProvider):
 
 def build_embedding_provider(provider: str, model: str, dimension: int) -> EmbeddingProvider:
     if provider == "sentence-transformers":
+        try:
+            import sentence_transformers  # noqa: F401
+        except ImportError:
+            logger.warning(
+                "sentence-transformers not installed; using mock embeddings. "
+                "Install with: pip install -e '.[embeddings]'"
+            )
+            return MockEmbedding(model="mock-hash", dimension=dimension)
         return SentenceTransformerEmbedding(model=model, dimension=dimension)
     if provider != "mock":
         logger.warning("Unknown embedding provider %r; using mock", provider)

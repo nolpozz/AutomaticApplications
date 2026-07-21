@@ -30,8 +30,9 @@ _HEADER_FONT = Font(bold=True, color="FFFFFF")
 # Row background by pipeline stage.
 _STATE_FILL = {
     JobState.DISCOVERED.value: "F3F4F6",
-    JobState.PARSED.value: "E5E7EB",
     JobState.EMBEDDED.value: "E5E7EB",
+    JobState.DEPRIORITIZED.value: "F1F5F9",
+    JobState.PARSED.value: "E5E7EB",
     JobState.CLASSIFIED.value: "DBEAFE",
     JobState.REJECTED.value: "Fee2E2",
     JobState.READY_FOR_RESUME.value: "FEF3C7",
@@ -55,6 +56,7 @@ _JOBS_HEADERS = [
     "URL",
     "Source",
     "Date Found",
+    "Relevance",
     "Classification Score",
     "Recommendation",
     "Current Stage",
@@ -101,6 +103,7 @@ class ExcelSynchronizer:
                 job.url,
                 job.source,
                 _fmt_dt(job.created_at),
+                (job.raw or {}).get("relevance", ""),
                 round(score.overall_score, 3) if score else "",
                 score.recommendation.value if score else "",
                 job.state,

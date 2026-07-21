@@ -12,9 +12,12 @@ from job_agent.models.domain import JobState
 
 # Allowed forward (and outcome) transitions.
 TRANSITIONS: dict[JobState, set[JobState]] = {
-    JobState.DISCOVERED: {JobState.PARSED, JobState.ARCHIVED},
-    JobState.PARSED: {JobState.EMBEDDED, JobState.ARCHIVED},
-    JobState.EMBEDDED: {JobState.CLASSIFIED, JobState.ARCHIVED},
+    # Jobs are embedded and ranked cheaply first; only the top-N per company are
+    # then parsed/classified (the expensive LLM stages).
+    JobState.DISCOVERED: {JobState.EMBEDDED, JobState.ARCHIVED},
+    JobState.EMBEDDED: {JobState.PARSED, JobState.DEPRIORITIZED, JobState.ARCHIVED},
+    JobState.DEPRIORITIZED: {JobState.PARSED, JobState.ARCHIVED},
+    JobState.PARSED: {JobState.CLASSIFIED, JobState.ARCHIVED},
     JobState.CLASSIFIED: {JobState.READY_FOR_RESUME, JobState.REJECTED, JobState.ARCHIVED},
     JobState.REJECTED: {JobState.ARCHIVED},
     JobState.READY_FOR_RESUME: {JobState.RESUME_GENERATED, JobState.ARCHIVED},
@@ -37,8 +40,8 @@ TRANSITIONS: dict[JobState, set[JobState]] = {
 # The automated portion of the pipeline the orchestrator drives, in order.
 AUTOMATED_FLOW = [
     JobState.DISCOVERED,
-    JobState.PARSED,
     JobState.EMBEDDED,
+    JobState.PARSED,
     JobState.CLASSIFIED,
     JobState.READY_FOR_RESUME,
     JobState.RESUME_GENERATED,

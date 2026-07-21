@@ -35,13 +35,23 @@ StrList: TypeAlias = Annotated[list[str], NoDecode]
 
 class LLMSettings(BaseSettings):
     provider: str = "mock"  # openai | anthropic | gemini | ollama | vllm | mock
-    model: str = "claude-opus-4-8"
+    model: str = "claude-opus-4-8"  # default model (used by document generation)
+    # Optional per-stage overrides. Cheap stages (parse/classify) can use a
+    # smaller model while the résumé/cover letter use the strong default.
+    parse_model: str | None = None
+    classify_model: str | None = None
+    resume_model: str | None = None
+    cover_letter_model: str | None = None
     temperature: float = 0.2
     max_tokens: int = 4096
     max_retries: int = 3
     timeout_seconds: int = 60
     ollama_base_url: str = "http://localhost:11434"
     vllm_base_url: str = "http://localhost:8000/v1"
+
+    def model_for(self, stage: str) -> str:
+        """Return the model for a stage, falling back to the default model."""
+        return getattr(self, f"{stage}_model", None) or self.model
 
 
 class EmbeddingSettings(BaseSettings):
@@ -93,6 +103,11 @@ class PipelineSettings(BaseSettings):
     enabled_boards: StrList = Field(default_factory=lambda: ["greenhouse", "lever", "ashby", "yc"])
     auto_sync_excel: bool = True
     dedup_similarity_threshold: float = 0.92
+
+    # After embedding + ranking, only the top-N most relevant roles per company
+    # proceed to the expensive LLM stages (parse/classify/generate). The rest are
+    # marked DEPRIORITIZED. Set 0 to disable the per-company cap.
+    top_per_company: int = 5
 
     # The role titles searched across all search-based boards.
     search_queries: StrList = Field(default_factory=lambda: list(DEFAULT_SEARCH_QUERIES))

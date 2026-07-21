@@ -68,8 +68,9 @@ class JobState(str, enum.Enum):
     """
 
     DISCOVERED = "DISCOVERED"
-    PARSED = "PARSED"
     EMBEDDED = "EMBEDDED"
+    DEPRIORITIZED = "DEPRIORITIZED"  # ranked out (not top-N for its company)
+    PARSED = "PARSED"
     CLASSIFIED = "CLASSIFIED"
     REJECTED = "REJECTED"
     READY_FOR_RESUME = "READY_FOR_RESUME"

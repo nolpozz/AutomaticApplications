@@ -9,6 +9,8 @@ cleanly (each stage only picks up jobs in its expected state).
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 
@@ -66,8 +68,9 @@ class RunReport:
     scraped: int = 0
     new: int = 0
     duplicates: int = 0
-    parsed: int = 0
     embedded: int = 0
+    deprioritized: int = 0
+    parsed: int = 0
     classified: int = 0
     rejected: int = 0
     resumes: int = 0
@@ -78,6 +81,7 @@ class RunReport:
     def summary(self) -> str:
         return (
             f"scraped={self.scraped} new={self.new} dup={self.duplicates} "
+            f"embedded={self.embedded} deprioritized={self.deprioritized} "
             f"parsed={self.parsed} classified={self.classified} rejected={self.rejected} "
             f"resumes={self.resumes} cover_letters={self.cover_letters} "
             f"ready={self.ready_for_review} errors={len(self.errors)}"
@@ -93,7 +97,13 @@ class Pipeline:
         self.db = Database(self.settings.storage.sqlite_path)
         self.db.create_all()
         self.kb = load_knowledge_base(self.settings.storage.user_data_path)
-        self.llm = build_llm(self.settings)
+        # Per-stage LLMs (cheap model for parse/classify, strong model for docs),
+        # cached by model name so identical models share one client.
+        self._llm_cache: dict[str, object] = {}
+        self.parse_llm = self._llm_for(self.settings.llm.model_for("parse"))
+        self.classify_llm = self._llm_for(self.settings.llm.model_for("classify"))
+        self.resume_llm = self._llm_for(self.settings.llm.model_for("resume"))
+        self.cover_llm = self._llm_for(self.settings.llm.model_for("cover_letter"))
         self.prompts = get_prompt_registry(self.settings.storage.prompts_path)
         self.renderer = DocumentRenderer(self.settings.storage.documents_path)
         self.formats = formats or ["md", "docx", "pdf"]
@@ -113,18 +123,18 @@ class Pipeline:
             kb=self.kb,
             embeddings=emb,
             retriever=Retriever(emb, self.kb),
-            parser=JobParser(self.llm, self.prompts),
+            parser=JobParser(self.parse_llm, self.prompts),
             classifier=JobClassifier(
-                self.llm,
+                self.classify_llm,
                 self.prompts,
                 self.kb,
                 target_levels=self.settings.pipeline.target_experience_levels,
                 target_keywords=self.settings.pipeline.target_keywords,
                 target_description=self.settings.pipeline.target_description,
             ),
-            resume=ResumeGenerator(self.llm, self.prompts, self.renderer, templates),
+            resume=ResumeGenerator(self.resume_llm, self.prompts, self.renderer, templates),
             cover=CoverLetterGenerator(
-                self.llm, self.prompts, self.renderer, templates, blocks=self.cover_blocks
+                self.cover_llm, self.prompts, self.renderer, templates, blocks=self.cover_blocks
             ),
             dedupe=DuplicateDetector(
                 repo, emb, similarity_threshold=self.settings.pipeline.dedup_similarity_threshold
@@ -133,6 +143,11 @@ class Pipeline:
                 repo, max_per_day=self.settings.pipeline.max_applications_per_day
             ),
         )
+
+    def _llm_for(self, model: str):  # type: ignore[no-untyped-def]
+        if model not in self._llm_cache:
+            self._llm_cache[model] = build_llm(self.settings, model=model)
+        return self._llm_cache[model]
 
     def _ensure_knowledge_indexed(self, ctx: PipelineContext) -> None:
         if not ctx.repo.list_embeddings("knowledge"):
@@ -147,14 +162,21 @@ class Pipeline:
         self._maybe_sync_excel()
         return report
 
-    def parse_pending(self) -> RunReport:
-        return self._run_stage(JobState.DISCOVERED, self._parse_job, "parsed")
-
     def embed_pending(self) -> RunReport:
-        return self._run_stage(JobState.PARSED, self._embed_job, "embedded")
+        """Embed discovered jobs (cheap), then rank + cap to top-N per company."""
+        report = self._run_stage(JobState.DISCOVERED, self._embed_job, "embedded")
+        with self.db.session_scope() as session:
+            ctx = self.context(session)
+            self._ensure_knowledge_indexed(ctx)
+            self._rank_and_filter(ctx, session, report)
+        self._maybe_sync_excel()
+        return report
+
+    def parse_pending(self) -> RunReport:
+        return self._run_stage(JobState.EMBEDDED, self._parse_job, "parsed")
 
     def classify_pending(self) -> RunReport:
-        return self._run_stage(JobState.EMBEDDED, self._classify_job, "classified")
+        return self._run_stage(JobState.PARSED, self._classify_job, "classified")
 
     def generate_resumes(self) -> RunReport:
         return self._run_stage(JobState.READY_FOR_RESUME, self._resume_job, "resumes")
@@ -169,17 +191,35 @@ class Pipeline:
         offline: bool | None = None,
         resume_after_failure: bool = True,
     ) -> RunReport:
-        """Run the full automated pipeline end to end."""
+        """Run the full automated pipeline end to end.
+
+        Order: scrape → embed (cheap) → rank & cap to top-N per company →
+        parse → classify → résumé → cover letter. Embedding/ranking are cheap and
+        run on everything; the expensive LLM stages run only on the survivors.
+        """
         report = RunReport()
         with self.db.session_scope() as session:
             ctx = self.context(session)
             self._ensure_knowledge_indexed(ctx)
             self._scrape_into(ctx, report, boards=boards, offline=offline)
             session.commit()
+
+            # 1) Embed everything (cheap), then rank and cap per company.
+            self._drain(
+                ctx,
+                session,
+                JobState.DISCOVERED,
+                self._embed_job,
+                "embedded",
+                report,
+                resume_after_failure,
+            )
+            self._rank_and_filter(ctx, session, report)
+
+            # 2) Expensive LLM stages run only on the survivors.
             stages: list[tuple[JobState, Callable[[PipelineContext, JobRecord], None], str]] = [
-                (JobState.DISCOVERED, self._parse_job, "parsed"),
-                (JobState.PARSED, self._embed_job, "embedded"),
-                (JobState.EMBEDDED, self._classify_job, "classified"),
+                (JobState.EMBEDDED, self._parse_job, "parsed"),
+                (JobState.PARSED, self._classify_job, "classified"),
                 (JobState.READY_FOR_RESUME, self._resume_job, "resumes"),
                 (JobState.RESUME_GENERATED, self._cover_job, "cover_letters"),
             ]
@@ -192,6 +232,46 @@ class Pipeline:
         self._maybe_sync_excel()
         logger.info("Pipeline run complete: %s", report.summary())
         return report
+
+    # -- ranking / per-company cap -----------------------------------------
+    def _candidate_query(self) -> str:
+        skills = ", ".join(i.title for i in self.kb.by_category("skill"))
+        return f"{self.kb.profile.headline} {self.kb.profile.summary} {skills}".strip()
+
+    def _rank_and_filter(self, ctx: PipelineContext, session: Session, report: RunReport) -> None:
+        """Score EMBEDDED jobs by relevance and keep only the top-N per company."""
+        top_n = self.settings.pipeline.top_per_company
+        jobs = ctx.repo.list_jobs(state=JobState.EMBEDDED)
+        if not jobs:
+            return
+        query_vec = ctx.embeddings.embed_text(self._candidate_query())
+        scored: list[tuple[JobRecord, float]] = []
+        for job in jobs:
+            emb = ctx.repo.get_embedding("job", job.id)
+            relevance = _dot(query_vec, emb.vector) if emb is not None else 0.0
+            job.raw = {**(job.raw or {}), "relevance": round(float(relevance), 4)}
+            session.add(job)
+            scored.append((job, relevance))
+
+        if not top_n or top_n <= 0:
+            session.commit()
+            return
+
+        by_company: dict[str, list[tuple[JobRecord, float]]] = defaultdict(list)
+        for job, relevance in scored:
+            by_company[_norm_company(job.company_name)].append((job, relevance))
+        for items in by_company.values():
+            items.sort(key=lambda pair: pair[1], reverse=True)
+            for job, _relevance in items[top_n:]:
+                ctx.repo.set_state(job, JobState.DEPRIORITIZED)
+                report.deprioritized += 1
+        session.commit()
+        logger.info(
+            "Ranked %d jobs; deprioritized %d beyond top-%d per company",
+            len(scored),
+            report.deprioritized,
+            top_n,
+        )
 
     def sync_excel(self) -> str:
         with self.db.session_scope() as session:
@@ -360,3 +440,16 @@ def _enum(enum_cls, value):  # type: ignore[no-untyped-def]
         return enum_cls(value)
     except ValueError:
         return enum_cls.UNKNOWN
+
+
+def _dot(a: list[float], b: list[float]) -> float:
+    """Dot product; equals cosine similarity for the L2-normalized vectors both
+    the mock and sentence-transformers providers produce."""
+    return sum(x * y for x, y in zip(a, b, strict=False))
+
+
+def _norm_company(name: str) -> str:
+    name = name.lower().strip()
+    name = re.sub(r"\(.*?\)", "", name)  # drop "(YC W24)", "(Remote)", etc.
+    name = re.sub(r"[^a-z0-9 ]", "", name)
+    return re.sub(r"\s+", " ", name).strip()

@@ -47,3 +47,33 @@ def test_excel_sync_creates_all_sheets(settings) -> None:  # type: ignore[no-unt
     jobs = wb["Jobs"]
     assert jobs.freeze_panes == "A2"
     assert jobs.max_row > 1
+
+
+@pytest.mark.integration
+def test_top_per_company_deprioritizes_extra_roles(settings) -> None:  # type: ignore[no-untyped-def]
+    settings.pipeline.top_per_company = 2  # sample companies have 3 roles each
+    pipeline = Pipeline(settings, formats=["md"])
+    report = pipeline.run(offline=True)
+    assert report.deprioritized > 0
+    counts = pipeline.stats().by_state
+    assert counts.get(JobState.DEPRIORITIZED.value, 0) == report.deprioritized
+    # Deprioritized jobs never reach the expensive stages.
+    assert report.parsed == report.new - report.deprioritized
+
+
+@pytest.mark.integration
+def test_top_per_company_zero_disables_cap(settings) -> None:  # type: ignore[no-untyped-def]
+    settings.pipeline.top_per_company = 0
+    report = Pipeline(settings, formats=["md"]).run(offline=True)
+    assert report.deprioritized == 0
+    assert report.parsed == report.new
+
+
+def test_per_stage_models_resolve() -> None:
+    from job_agent.config.settings import LLMSettings
+
+    cfg = LLMSettings(model="gpt-4o", parse_model="gpt-4o-mini", classify_model="gpt-4o-mini")
+    assert cfg.model_for("parse") == "gpt-4o-mini"
+    assert cfg.model_for("classify") == "gpt-4o-mini"
+    assert cfg.model_for("resume") == "gpt-4o"  # falls back to default
+    assert cfg.model_for("cover_letter") == "gpt-4o"

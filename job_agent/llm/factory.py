@@ -16,9 +16,11 @@ from job_agent.llm.providers.mock import MockLLM
 logger = get_logger(__name__)
 
 
-def build_llm(settings: Settings | None = None) -> LLMProvider:
+def build_llm(settings: Settings | None = None, *, model: str | None = None) -> LLMProvider:
+    """Build a provider. ``model`` overrides ``settings.llm.model`` (per-stage)."""
     settings = settings or get_settings()
     cfg = settings.llm
+    model = model or cfg.model
     common: dict[str, Any] = dict(
         temperature=cfg.temperature,
         max_tokens=cfg.max_tokens,
@@ -28,35 +30,35 @@ def build_llm(settings: Settings | None = None) -> LLMProvider:
     provider = cfg.provider.lower()
 
     if provider == "mock":
-        return MockLLM(cfg.model, **common)
+        return MockLLM(model, **common)
 
     if provider == "openai":
         from job_agent.llm.providers.openai_provider import OpenAILLM
 
         key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else None
-        return OpenAILLM(cfg.model, api_key=key, **common)
+        return OpenAILLM(model, api_key=key, **common)
 
     if provider == "vllm":
         from job_agent.llm.providers.openai_provider import OpenAILLM
 
-        return OpenAILLM(cfg.model, base_url=cfg.vllm_base_url, api_key="not-needed", **common)
+        return OpenAILLM(model, base_url=cfg.vllm_base_url, api_key="not-needed", **common)
 
     if provider == "anthropic":
         from job_agent.llm.providers.anthropic_provider import AnthropicLLM
 
         key = settings.anthropic_api_key.get_secret_value() if settings.anthropic_api_key else None
-        return AnthropicLLM(cfg.model, api_key=key, **common)
+        return AnthropicLLM(model, api_key=key, **common)
 
     if provider == "gemini":
         from job_agent.llm.providers.gemini_provider import GeminiLLM
 
         key = settings.google_api_key.get_secret_value() if settings.google_api_key else None
-        return GeminiLLM(cfg.model, api_key=key, **common)
+        return GeminiLLM(model, api_key=key, **common)
 
     if provider == "ollama":
         from job_agent.llm.providers.ollama_provider import OllamaLLM
 
-        return OllamaLLM(cfg.model, base_url=cfg.ollama_base_url, **common)
+        return OllamaLLM(model, base_url=cfg.ollama_base_url, **common)
 
     logger.warning("Unknown LLM provider %r; falling back to mock", provider)
-    return MockLLM(cfg.model, **common)
+    return MockLLM(model, **common)
