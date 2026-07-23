@@ -20,6 +20,7 @@ _JOB_RE = re.compile(r"https://www\.lifeatspotify\.com/jobs/([a-z0-9][a-z0-9-]+)
 
 class SpotifyScraper(AbstractScraper):
     source = "spotify"
+    requires_slugs = False
 
     def _fetch_live(self) -> list[Job]:
         index_url = self.config.extra.get("index_url", _INDEX)

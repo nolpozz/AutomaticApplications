@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from job_agent.config.logging import get_logger
 from job_agent.models.domain import Job
 from job_agent.scrapers.base import AbstractScraper, html_to_text, parse_iso
+
+logger = get_logger(__name__)
 
 
 class GreenhouseScraper(AbstractScraper):
@@ -14,9 +17,14 @@ class GreenhouseScraper(AbstractScraper):
         jobs: list[Job] = []
         with self._client() as client:
             for token in self.config.slugs:
-                resp = client.get(self.API.format(token=token))
-                resp.raise_for_status()
-                for item in resp.json().get("jobs", []):
+                try:
+                    resp = client.get(self.API.format(token=token))
+                    resp.raise_for_status()
+                    items = resp.json().get("jobs", [])
+                except Exception as exc:
+                    logger.warning("greenhouse: slug %r failed (%s); skipping", token, exc)
+                    continue
+                for item in items:
                     loc = (item.get("location") or {}).get("name")
                     jobs.append(
                         self._job(

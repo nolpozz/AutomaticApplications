@@ -18,6 +18,7 @@ _HOST = "https://explore.jobs.netflix.net"
 
 class NetflixScraper(AbstractScraper):
     source = "netflix"
+    requires_slugs = False
     API = f"{_HOST}/api/apply/v2/jobs"
 
     def _fetch_live(self) -> list[Job]:

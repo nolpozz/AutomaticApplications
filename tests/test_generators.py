@@ -28,7 +28,7 @@ def test_resume_generation_uses_real_material(  # type: ignore[no-untyped-def]
     gen = ResumeGenerator(llm, prompts, renderer, settings.storage.templates_path)
     doc = gen.generate(sample_job, parsed, retrieved, knowledge.profile, formats=["md"])
     assert doc.kind == "resume"
-    assert doc.prompt_version == "resume.v1"
+    assert doc.prompt_version == "resume.v2"
     assert knowledge.profile.name in doc.markdown  # header is the real user
     assert "md" in doc.paths
 

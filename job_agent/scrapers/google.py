@@ -21,6 +21,7 @@ _ID_RE = re.compile(r"jobs/results/(\d+)")
 
 class GoogleScraper(AbstractScraper):
     source = "google"
+    requires_slugs = False
 
     def _fetch_live(self) -> list[Job]:
         jobs: list[Job] = []

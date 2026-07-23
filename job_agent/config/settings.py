@@ -119,11 +119,46 @@ class PipelineSettings(BaseSettings):
     target_keywords: StrList = Field(default_factory=list)  # e.g. ["intern", "internship"]
     target_description: str = ""  # human phrase shown to the LLM, e.g. "Master's-level internships"
 
+    # Post-classification score boosts (additive, applied after the LLM/heuristic
+    # score). A role whose LOCATION matches target_locations gets +location_boost;
+    # a role whose TITLE contains a boost_keyword gets +keyword_boost per hit. The
+    # total boost per job is capped at boost_cap. All default off (0 / empty).
+    target_locations: StrList = Field(default_factory=list)  # e.g. ["new york", "nyc"]
+    location_boost: float = 0.0
+    boost_keywords: StrList = Field(default_factory=list)  # title terms, e.g. ["research", "nlp"]
+    keyword_boost: float = 0.0
+    boost_cap: float = 0.1
+
+    # Domain-relevance gate. A role with NONE of these keywords in its title,
+    # description, or parsed skills is multiplied by domain_penalty (pushing
+    # off-domain roles below threshold). penalty >= 1.0 or empty keywords = off.
+    domain_keywords: StrList = Field(default_factory=list)
+    domain_penalty: float = 1.0
+
+    # Company prestige. FAANG+ / top AI labs get +prestige_boost on their score
+    # (high-growth startups get 0.6x that), and prestigious companies keep
+    # top_per_company * prestige_cap_multiplier roles through the ranking stage.
+    # 0 boost + multiplier 1 = disabled. Extend the built-in lists with extras.
+    prestige_boost: float = 0.0
+    prestige_cap_multiplier: int = 1
+    prestige_extra_faang: StrList = Field(default_factory=list)
+    prestige_extra_growth: StrList = Field(default_factory=list)
+
+    # Companies to exclude entirely — matched on word boundaries against the
+    # company name. Blocked jobs are dropped at scrape time (no LLM spend).
+    blocked_companies: StrList = Field(default_factory=list)
+
     @field_validator(
         "enabled_boards",
         "search_queries",
         "target_experience_levels",
         "target_keywords",
+        "target_locations",
+        "boost_keywords",
+        "domain_keywords",
+        "prestige_extra_faang",
+        "prestige_extra_growth",
+        "blocked_companies",
         mode="before",
     )
     @classmethod

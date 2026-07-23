@@ -13,6 +13,7 @@ from job_agent.scrapers.base import AbstractScraper, html_to_text
 
 class WorkdayScraper(AbstractScraper):
     source = "workday"
+    requires_slugs = False
 
     def _fetch_live(self) -> list[Job]:
         targets = self.config.extra.get("targets", [])

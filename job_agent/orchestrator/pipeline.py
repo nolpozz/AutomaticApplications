@@ -17,7 +17,10 @@ from dataclasses import dataclass, field
 from sqlalchemy.orm import Session
 
 from job_agent.analytics.analytics import Analytics, Stats
+from job_agent.classifier.boost import ScoreBoost
 from job_agent.classifier.classifier import JobClassifier
+from job_agent.classifier.domain import DomainFilter
+from job_agent.classifier.prestige import CompanyPrestige
 from job_agent.config.logging import get_logger
 from job_agent.config.settings import Settings, get_settings
 from job_agent.cover_letter.blocks import load_blocks
@@ -43,6 +46,7 @@ from job_agent.models.domain import (
 from job_agent.parser.llm_parser import JobParser
 from job_agent.resume.generator import ResumeGenerator
 from job_agent.retrieval.retriever import Retriever
+from job_agent.scrapers.blocklist import CompanyBlocklist
 from job_agent.tracker.tracker import ApplicationTracker
 
 logger = get_logger(__name__)
@@ -68,6 +72,7 @@ class RunReport:
     scraped: int = 0
     new: int = 0
     duplicates: int = 0
+    blocked: int = 0
     embedded: int = 0
     deprioritized: int = 0
     parsed: int = 0
@@ -81,7 +86,7 @@ class RunReport:
     def summary(self) -> str:
         return (
             f"scraped={self.scraped} new={self.new} dup={self.duplicates} "
-            f"embedded={self.embedded} deprioritized={self.deprioritized} "
+            f"blocked={self.blocked} embedded={self.embedded} deprioritized={self.deprioritized} "
             f"parsed={self.parsed} classified={self.classified} rejected={self.rejected} "
             f"resumes={self.resumes} cover_letters={self.cover_letters} "
             f"ready={self.ready_for_review} errors={len(self.errors)}"
@@ -131,6 +136,9 @@ class Pipeline:
                 target_levels=self.settings.pipeline.target_experience_levels,
                 target_keywords=self.settings.pipeline.target_keywords,
                 target_description=self.settings.pipeline.target_description,
+                boost=ScoreBoost.from_pipeline(self.settings.pipeline),
+                domain=DomainFilter.from_pipeline(self.settings.pipeline),
+                prestige=CompanyPrestige.from_pipeline(self.settings.pipeline),
             ),
             resume=ResumeGenerator(self.resume_llm, self.prompts, self.renderer, templates),
             cover=CoverLetterGenerator(
@@ -257,12 +265,15 @@ class Pipeline:
             session.commit()
             return
 
+        prestige = CompanyPrestige.from_pipeline(self.settings.pipeline)
         by_company: dict[str, list[tuple[JobRecord, float]]] = defaultdict(list)
         for job, relevance in scored:
             by_company[_norm_company(job.company_name)].append((job, relevance))
         for items in by_company.values():
             items.sort(key=lambda pair: pair[1], reverse=True)
-            for job, _relevance in items[top_n:]:
+            # Prestigious companies (FAANG+, high-growth) keep more of their roles.
+            cap = prestige.cap_for(items[0][0].company_name, top_n)
+            for job, _relevance in items[cap:]:
                 ctx.repo.set_state(job, JobState.DEPRIORITIZED)
                 report.deprioritized += 1
         session.commit()
@@ -294,10 +305,14 @@ class Pipeline:
         from job_agent.scrapers.registry import build_scrapers
 
         scrapers = build_scrapers(self.settings, only=boards, offline=offline)
+        blocklist = CompanyBlocklist.from_pipeline(self.settings.pipeline)
         limit = self.settings.pipeline.max_jobs
         for scraper in scrapers:
             for job in scraper.fetch():
                 report.scraped += 1
+                if blocklist.blocks(job.company):
+                    report.blocked += 1
+                    continue
                 match = ctx.dedupe.find_duplicate(job)
                 if match is not None:
                     report.duplicates += 1
@@ -363,6 +378,9 @@ class Pipeline:
         parsed = ctx.repo.get_parsed(job.id) or ParsedJob()
         score, version = ctx.classifier.classify(_to_domain(job), parsed)
         ctx.repo.save_classifier(job.id, score, version)
+        if score.base_score is not None:
+            # Remember the pre-adjustment score so an offline re-score stays consistent.
+            job.raw = {**(job.raw or {}), "base_score": score.base_score}
         ctx.repo.set_state(job, JobState.CLASSIFIED)
         if score.passes(self.settings.pipeline.classifier_threshold):
             ctx.repo.set_state(job, JobState.READY_FOR_RESUME)

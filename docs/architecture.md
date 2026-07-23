@@ -51,19 +51,55 @@ Cross-cutting services: **LLM layer** (provider abstraction + versioned prompts)
 ## The state machine
 
 ```
-DISCOVERED → PARSED → EMBEDDED → CLASSIFIED ─┬→ READY_FOR_RESUME → RESUME_GENERATED
-                                             │        → COVER_LETTER_GENERATED
-                                             │        → READY_FOR_REVIEW
+DISCOVERED → EMBEDDED → PARSED → CLASSIFIED ─┬→ READY_FOR_RESUME → RESUME_GENERATED
+                 │                           │        → COVER_LETTER_GENERATED
+                 └→ DEPRIORITIZED → PARSED   │        → READY_FOR_REVIEW
                                              └→ REJECTED
 READY_FOR_REVIEW → APPROVED → SUBMITTED ─┬→ INTERVIEW → OFFER
                                          ├→ REJECTED_BY_COMPANY
                                          └→ (any) → ARCHIVED
 ```
 
-The orchestrator drives the automated portion (`DISCOVERED … COVER_LETTER_GENERATED`
-→ `READY_FOR_REVIEW`). The **tracker** owns the human-in-the-loop transitions
-(`APPROVED`, `SUBMITTED`, outcomes). Allowed transitions live in
+Jobs are **embedded and ranked cheaply first**; only the top-N per company advance
+to the expensive `PARSED`/`CLASSIFIED` LLM stages, and the rest are `DEPRIORITIZED`
+(a prestigious company keeps `top_per_company × prestige_cap_multiplier` roles — see
+below). The orchestrator drives the automated portion (`DISCOVERED …
+COVER_LETTER_GENERATED` → `READY_FOR_REVIEW`). The **tracker** owns the
+human-in-the-loop transitions (`APPROVED`, `SUBMITTED`, outcomes). `ARCHIVED` is
+reachable from any state (used by `scripts/rescore.py` to drop roles that fall below
+threshold after re-tuning). Allowed transitions live in
 `job_agent/orchestrator/states.py`.
+
+## The scoring pipeline
+
+`classifier/classifier.py` first obtains five **dimension ratings on a 1-100 scale**
+— technical, experience, education, research, interest — from the LLM (via the
+`classify_job` prompt) or the deterministic heuristic fallback. Crucially the model
+returns *only* those ratings; `_coerce` normalizes them to [0, 1] and `_weighted_overall`
+applies `_WEIGHTS` to compute the base `overall_score`. This is the single place the
+overall is computed, so the weighting is identical for every provider and a user's
+preference weights always apply (the mock/heuristic path emits the same 1-100 wire
+shape, so both paths flow through one weighting funnel). `_finalize` then runs the
+base score through a chain of deterministic, configurable adjustments — each in its
+own module under `classifier/` and each built `from_pipeline(settings.pipeline)` so
+it is off unless configured:
+
+```
+base_score
+  × LevelTargeting.factor   (targeting.py — penalize off-target level/keywords)
+  × DomainFilter.factor     (domain.py    — penalize roles with no domain keywords)
+  + CompanyPrestige.boost   (prestige.py  — FAANG+/high-growth tier bonus)
+  + ScoreBoost.apply        (boost.py     — capped location/title-keyword bonuses)
+  = overall_score  (clamped to [0,1]; drives recommendation + interview_probability)
+```
+
+Multipliers come first so an off-target/off-domain role cannot be lifted over the
+threshold by an additive boost. The pre-adjustment value is stored as
+`ClassifierScore.base_score` (and mirrored into `jobs.raw["base_score"]`) so the
+whole chain can be **recomputed from a stable base** — that is exactly what
+`scripts/rescore.py` does, re-ranking an already-classified database with no LLM
+calls after you change the settings. A `CompanyBlocklist` (`scrapers/blocklist.py`)
+short-circuits this entirely by dropping blocked employers at scrape time.
 
 ## The LLM abstraction and deterministic fallbacks
 

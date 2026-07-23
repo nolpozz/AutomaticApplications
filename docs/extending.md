@@ -25,7 +25,14 @@ The system is designed so common extensions touch exactly one place.
 
    `self._job(...)` normalizes and fills sensible defaults (remote/level inference,
    dedup key). `fetch()` (in the base) handles live-vs-sample selection, per-run
-   dedup, capping, and error isolation for you.
+   dedup, capping, and error isolation for you. A live board that errors or returns
+   nothing yields an empty list — it never injects `_sample()` rows into a real run;
+   sample data is used only in explicit offline mode.
+
+   Set `requires_slugs = False` on the class if the board is search/target based and
+   should go live without configured slugs (its targets live in `config` `extra`,
+   e.g. Amazon/Google/Netflix/Spotify/Workday). The default `True` means the board
+   only goes live once `slugs`/`urls` are configured (Greenhouse/Lever/Ashby/GitHub).
 
 2. Register it in `job_agent/scrapers/registry.py`:
 
@@ -65,6 +72,26 @@ vector store. Both implement the same `VectorStore` interface.
 The deterministic heuristic lives in `JobClassifier._heuristic`. Adjust `_WEIGHTS`
 or the sub-scores. When a real LLM provider is selected the model's JSON is used
 and the heuristic becomes the fallback only.
+
+## Tune the ranking pipeline
+
+The base score is adjusted by four small, self-contained modules under
+`job_agent/classifier/`, each built `from_pipeline(settings.pipeline)` and applied in
+`JobClassifier._finalize`:
+
+* `targeting.py` (`LevelTargeting`) — level/keyword down-weight,
+* `domain.py` (`DomainFilter`) — off-domain penalty,
+* `prestige.py` (`CompanyPrestige`) — FAANG+/high-growth tier bonus and per-company
+  cap multiplier (edit `FAANG_PLUS` / `HIGH_GROWTH` to change the built-in lists),
+* `boost.py` (`ScoreBoost`) — capped location/title-keyword bonuses.
+
+Add a new adjustment by writing a module with the same shape (an `active` property, a
+`from_pipeline` constructor, and a pure scoring method), wiring one line into
+`_finalize`, and mirroring it in `scripts/rescore.py` so offline re-scores match.
+Expose its knobs as fields on `PipelineSettings` (`config/settings.py`). See
+[`setup.md`](setup.md#ranking--targeting-controls) for the current knobs. To exclude
+employers entirely, add them to `blocked_companies` (dropped at scrape time by
+`scrapers/blocklist.py`) rather than penalizing them here.
 
 ## Future extension points (interfaces are ready)
 

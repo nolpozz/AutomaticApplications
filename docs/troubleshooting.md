@@ -25,12 +25,27 @@ needs nothing. For real embeddings: `pip install -e ".[embeddings]"` and set
 `JOB_AGENT_EMBEDDING__PROVIDER=sentence-transformers`. The first run downloads the
 model.
 
-### Live scraping returns nothing / falls back to sample data
+### Live scraping returns nothing
 
-A board only fetches live when it has `slugs`/`urls`/`extra` configured in
-`config/sources.yaml` **and** you didn't pass `--offline`. On any HTTP error the
-scraper logs a warning and uses sample data so one bad board never breaks a run.
-Check the board token in the company's careers URL.
+A board fetches live when you pass `--no-offline` **and** either it has
+`slugs`/`urls`/`extra` in `config/sources.yaml` (Greenhouse/Lever/Ashby/GitHub) or
+it is a search/target board that needs no slugs (Amazon, Google, Netflix, Spotify,
+Workday). On any HTTP error a live board logs a warning and returns **zero jobs** —
+it does *not* fall back to sample data (fictional rows are never injected into a real
+run). So an empty live board means a bad token or a failed request: verify the slug
+in the company's careers URL (`boards.greenhouse.io/<slug>`, `jobs.ashbyhq.com/<slug>`,
+…). Sample data appears only in explicit offline mode (`job-agent pipeline` without
+`--no-offline`).
+
+### I tuned the ranking settings but the review queue looks the same
+
+Changing `target_*`, `domain_*`, `prestige_*`, `*_boost`, or `blocked_companies`
+only affects *future* classifications. To apply them to jobs already in the database
+without re-scraping or spending on the LLM, run `python3 scripts/rescore.py`. It
+re-scores from each job's stored `base_score`, `ARCHIVED`s roles that now fall below
+`classifier_threshold` (their documents stay on disk — see them with
+`job-agent review --state ARCHIVED`), and reports previously-`REJECTED` roles that
+now qualify. It also re-ranks the Excel workbook.
 
 ### LinkedIn / Wellfound / YC return only sample data
 

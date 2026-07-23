@@ -18,4 +18,36 @@ pipeline:
   enabled_boards: [greenhouse, lever, ashby, yc]
   auto_sync_excel: true
 
+  # --- Ranking & targeting controls (all optional, all default off) ----------
+  # These reshape which roles reach the expensive stages and how they rank. They
+  # are deterministic and are also honored by scripts/rescore.py, so you can tune
+  # them and re-rank an existing database with no LLM calls. See docs/setup.md.
+
+  # Role targeting: down-weight roles that don't match the level/keywords you want.
+  # target_experience_levels: [internship, entry]
+  # target_keywords: [intern, co-op, "student researcher"]
+  # target_description: "Master's-level ML/AI internships"
+
+  # Domain gate: a role with none of these terms in title/description/skills is
+  # multiplied by domain_penalty (push generic roles below threshold). >=1.0 = off.
+  # domain_keywords: [ml, ai, "machine learning", nlp, llm, "deep learning"]
+  # domain_penalty: 0.5
+
+  # Company prestige: FAANG+/top-AI-labs get +prestige_boost (high-growth gets 0.6x),
+  # and prestigious companies keep top_per_company * prestige_cap_multiplier roles.
+  # prestige_boost: 0.05
+  # prestige_cap_multiplier: 2
+  # prestige_extra_faang: []          # extend the built-in FAANG+ list
+  # prestige_extra_growth: []         # extend the built-in high-growth list
+
+  # Additive boosts (capped by boost_cap) for preferred locations / title terms.
+  # target_locations: ["new york", nyc, remote]
+  # location_boost: 0.05
+  # boost_keywords: [research, nlp, "computer vision"]
+  # keyword_boost: 0.03
+  # boost_cap: 0.1
+
+  # Never surface these employers (dropped at scrape time, before any LLM spend).
+  # blocked_companies: []
+
 log_level: INFO

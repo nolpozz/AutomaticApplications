@@ -16,6 +16,12 @@ htmlcov/
 # Environment / secrets
 .env
 
+# Per-user configuration. Each user's personal tailoring (targeting, locations,
+# blocklist, thresholds, prestige boost) lives here and must NOT be committed —
+# that would change the defaults for every other user. The shared, committed
+# defaults live in config/config.example.yaml and config/sources.yaml.
+/config/config.yaml
+
 # Personal background — NEVER pushed. Your real resume content lives here.
 # The committed `user_data.example/` is the template to copy from.
 /user_data/*

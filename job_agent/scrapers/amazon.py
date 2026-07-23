@@ -18,6 +18,7 @@ _BASE = "https://www.amazon.jobs"
 
 class AmazonScraper(AbstractScraper):
     source = "amazon"
+    requires_slugs = False
     API = f"{_BASE}/en/search.json"
 
     def _fetch_live(self) -> list[Job]:

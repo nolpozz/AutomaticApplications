@@ -14,16 +14,23 @@
 # =============================================================================
 sources:
 
-  # --- AI labs on supported ATS platforms [LIVE] -----------------------------
+  # --- AI / ML research labs on supported ATS platforms [LIVE] ---------------
+  # Curated to weight the funnel toward pure ML/AI research employers. An
+  # unrecognized slug simply returns zero jobs (fails gracefully), so prune or
+  # extend freely. Verify a token by opening boards.greenhouse.io/<slug> etc.
   greenhouse:
     slugs:
-      - anthropic          # boards.greenhouse.io/anthropic
+      - anthropic          # boards.greenhouse.io/anthropic  (verified)
+      - scaleai            # Scale AI                         (verified)
+      - sambanovasystems   # SambaNova                        (verified)
+      - databricks         # Databricks                       (verified)
     extra: {}
   ashby:
     slugs:
-      - openai             # jobs.ashbyhq.com/openai
+      - openai             # jobs.ashbyhq.com/openai          (verified)
+      - cohere             # Cohere                           (verified)
   lever:
-    slugs: []              # e.g. ["huggingface"]
+    slugs: []              # no verified AI-lab boards on Lever (HF/Cohere/Anduril moved off)
 
   # --- GitHub aggregator repos [LIVE] — highest-signal internship source -----
   # Bots update these constantly with direct posting URLs. Verified active.

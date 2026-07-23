@@ -11,6 +11,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from job_agent.classifier.boost import ScoreBoost
+from job_agent.classifier.domain import DomainFilter
+from job_agent.classifier.prestige import CompanyPrestige
+from job_agent.classifier.targeting import LevelTargeting, job_level
 from job_agent.config.logging import get_logger
 from job_agent.knowledge.loader import KnowledgeBase
 from job_agent.llm.base import LLMProvider
@@ -27,6 +31,13 @@ _WEIGHTS = {
     "research": 0.10,
     "interest": 0.25,
 }
+# The five fit dimensions, in ClassifierScore field order. The LLM (and the
+# deterministic heuristic) rate each on a 1-100 scale; we divide by _SCALE and
+# apply _WEIGHTS OURSELVES to compute the overall score. The model never returns
+# an overall, so a user's preference weights are the ones applied for every
+# provider — ratings stay consistent whichever LLM produced the dimensions.
+_SUBSCORES = ("technical", "experience", "education", "research", "interest")
+_SCALE = 100.0
 
 
 class JobClassifier:
@@ -39,6 +50,9 @@ class JobClassifier:
         target_levels: list[str] | None = None,
         target_keywords: list[str] | None = None,
         target_description: str = "",
+        boost: ScoreBoost | None = None,
+        domain: DomainFilter | None = None,
+        prestige: CompanyPrestige | None = None,
     ) -> None:
         self.llm = llm
         self.prompts = prompts
@@ -51,6 +65,10 @@ class JobClassifier:
         self._target_levels = {t.lower() for t in (target_levels or [])}
         self._target_keywords = {t.lower() for t in (target_keywords or [])}
         self._target_description = target_description.strip()
+        self._targeting = LevelTargeting(target_levels or [], target_keywords or [])
+        self._boost = boost
+        self._domain = domain
+        self._prestige = prestige
 
     def classify(self, job: Job, parsed: ParsedJob) -> tuple[ClassifierScore, str]:
         rendered = self.prompts.render(
@@ -71,7 +89,45 @@ class JobClassifier:
             rendered.messages(), fallback=lambda: self._heuristic(job, parsed), temperature=0.0
         )
         score = _coerce(data, self, job, parsed)
+        score = self._finalize(score, job, parsed)
         return score, rendered.version
+
+    def _finalize(self, score: ClassifierScore, job: Job, parsed: ParsedJob) -> ClassifierScore:
+        """Adjust the base score: role-targeting penalty, then domain penalty, then
+        company prestige, then location/keyword boosts. Prestige is applied AFTER
+        the targeting penalty, so it ranks on-target (intern) roles highest but
+        cannot rescue off-target (e.g. full-time) roles over the threshold."""
+        overall = score.overall_score
+        score.base_score = overall  # pre-adjustment score, for a consistent re-score
+        notes: list[str] = []
+        level_factor = self._targeting.factor(
+            level=job_level(job), title=job.title, description=job.description
+        )
+        if level_factor < 1.0:
+            overall = round(overall * level_factor, 4)
+            notes.append(f"Off-target for {self._target_preference()}; x{level_factor:g}")
+        if self._domain and self._domain.active:
+            factor = self._domain.factor(domain_text(job, parsed))
+            if factor < 1.0:
+                overall = round(overall * factor, 4)
+                notes.append(f"Off-domain (no ML/AI signal); x{factor:g}")
+        if self._prestige and self._prestige.active:
+            bonus, tier = self._prestige.score_boost(job.company)
+            if bonus:
+                overall = min(1.0, round(overall + bonus, 4))
+                notes.append(f"Prestige boost +{bonus:g} ({tier})")
+        if self._boost and self._boost.active:
+            overall, boost_notes = self._boost.apply(
+                overall, title=job.title, location=job.location or ""
+            )
+            notes += boost_notes
+        if overall == score.overall_score:
+            return score
+        score.overall_score = overall
+        score.recommendation = _recommend(overall)
+        score.interview_probability = round(overall * 0.6, 4)
+        score.reasons = list(score.reasons) + notes
+        return score
 
     def _target_preference(self) -> str:
         if self._target_description:
@@ -80,24 +136,6 @@ class JobClassifier:
             bits = sorted(self._target_levels | self._target_keywords)
             return "roles matching: " + ", ".join(bits)
         return ""
-
-    def _level_factor(self, job: Job, parsed: ParsedJob) -> float:
-        """Multiplier in (0,1] that prefers target roles and penalizes mismatches."""
-        if not self._target_levels and not self._target_keywords:
-            return 1.0
-        level = (
-            job.experience_level.value
-            if hasattr(job.experience_level, "value")
-            else str(job.experience_level)
-        )
-        haystack = f"{job.title} {job.description}".lower()
-        matches = level in self._target_levels or any(k in haystack for k in self._target_keywords)
-        if matches:
-            return 1.0
-        # Clearly-mismatched senior/staff roles are pushed well below threshold.
-        if level in {"senior", "staff"}:
-            return 0.6
-        return 0.82  # mid/entry/unknown: mild penalty so target roles rank higher
 
     def _heuristic(self, job: Job, parsed: ParsedJob) -> dict[str, Any]:
         required = _normalize(
@@ -139,32 +177,30 @@ class JobClassifier:
         )
         interest = min(1.0, 0.4 + interest)  # a floor of baseline interest
 
-        overall = (
-            _WEIGHTS["technical"] * technical
-            + _WEIGHTS["experience"] * experience
-            + _WEIGHTS["education"] * education
-            + _WEIGHTS["research"] * research
-            + _WEIGHTS["interest"] * interest
-        )
-        # Apply role-targeting preference (e.g. internships only).
-        level_factor = self._level_factor(job, parsed)
-        overall *= level_factor
-        interview = round(overall * 0.6, 4)
-
+        # Emit the five dimensions on the same 1-100 wire scale the LLM uses, so a
+        # single path (_coerce -> _weighted_overall) normalizes and applies
+        # _WEIGHTS for every provider. The overall score, recommendation, and
+        # interview probability are derived there, not here — role targeting and
+        # the other ranking adjustments then run in _finalize.
         reasons = _reasons(required, self._vocab, self._blob, parsed, self._years)
-        if level_factor < 1.0:
-            reasons.append(f"Off-target role for {self._target_preference()} (down-weighted)")
         return {
-            "technical_match": round(technical, 4),
-            "experience_match": round(experience, 4),
-            "education_match": round(education, 4),
-            "research_match": round(research, 4),
-            "interest_match": round(interest, 4),
-            "interview_probability": interview,
-            "overall_score": round(overall, 4),
-            "recommendation": _recommend(overall).value,
+            "technical_match": round(technical * _SCALE, 2),
+            "experience_match": round(experience * _SCALE, 2),
+            "education_match": round(education * _SCALE, 2),
+            "research_match": round(research * _SCALE, 2),
+            "interest_match": round(interest * _SCALE, 2),
             "reasons": reasons,
         }
+
+
+def domain_text(job: Job, parsed: ParsedJob | None) -> str:
+    """Concatenated text used for the domain-relevance check (title + description
+    + parsed skills). Shared by the classifier and the offline re-score."""
+    parts = [job.title, job.description or ""]
+    if parsed is not None:
+        parts += parsed.required_skills + parsed.preferred_skills
+        parts += parsed.keywords + parsed.frameworks + parsed.programming_languages
+    return " ".join(p for p in parts if p)
 
 
 def _recommend(overall: float) -> Recommendation:
@@ -262,11 +298,59 @@ def _reasons(
     return reasons or ["Assessed on available signals"]
 
 
+def _read_subscores(data: dict[str, Any]) -> dict[str, float]:
+    """Read the five dimension ratings and normalize to [0, 1].
+
+    The LLM (and the heuristic) return each dimension on a 1-100 scale; dividing by
+    ``_SCALE`` and clamping yields the internal [0, 1] representation. Missing or
+    non-numeric values degrade to 0.0 rather than raising, so a partial model
+    response still produces a usable score.
+    """
+    out: dict[str, float] = {}
+    for name in _SUBSCORES:
+        try:
+            val = float(data.get(f"{name}_match", 0.0)) / _SCALE
+        except (TypeError, ValueError):
+            val = 0.0
+        out[name] = max(0.0, min(1.0, val))
+    return out
+
+
+def _weighted_overall(sub: dict[str, float]) -> float:
+    """Combine the five [0, 1] dimension scores with ``_WEIGHTS``.
+
+    This is the ONE place the overall fit score is computed, for every provider.
+    The LLM supplies only the dimension ratings, never the overall, so the user's
+    preference weights are always the weights applied.
+    """
+    return round(sum(_WEIGHTS[name] * sub[name] for name in _WEIGHTS), 4)
+
+
 def _coerce(
     data: dict[str, Any], clf: JobClassifier, job: Job, parsed: ParsedJob
 ) -> ClassifierScore:
-    try:
-        return ClassifierScore.model_validate(data)
-    except Exception as exc:
-        logger.warning("Classifier output invalid (%s); using heuristic", exc)
-        return ClassifierScore.model_validate(clf._heuristic(job, parsed))
+    """Build a ClassifierScore from raw classifier output (LLM or heuristic).
+
+    Applies our own weighting to the model's 1-100 dimension ratings so the overall
+    score is deterministic and provider-independent. Output missing all five
+    dimensions falls back to the deterministic heuristic.
+    """
+    if not isinstance(data, dict) or not any(f"{n}_match" in data for n in _SUBSCORES):
+        logger.warning("Classifier output missing dimension ratings; using heuristic")
+        data = clf._heuristic(job, parsed)
+    sub = _read_subscores(data)
+    overall = _weighted_overall(sub)
+    reasons = data.get("reasons")
+    if not isinstance(reasons, list) or not reasons:
+        reasons = ["Assessed on available signals"]
+    return ClassifierScore(
+        technical_match=sub["technical"],
+        experience_match=sub["experience"],
+        education_match=sub["education"],
+        research_match=sub["research"],
+        interest_match=sub["interest"],
+        overall_score=overall,
+        interview_probability=round(overall * 0.6, 4),
+        recommendation=_recommend(overall),
+        reasons=[str(r) for r in reasons][:6],
+    )

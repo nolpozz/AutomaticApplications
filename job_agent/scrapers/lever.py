@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+from job_agent.config.logging import get_logger
 from job_agent.models.domain import Job
 from job_agent.scrapers.base import AbstractScraper, html_to_text, parse_iso
+
+logger = get_logger(__name__)
 
 
 class LeverScraper(AbstractScraper):
@@ -14,9 +17,14 @@ class LeverScraper(AbstractScraper):
         jobs: list[Job] = []
         with self._client() as client:
             for company in self.config.slugs:
-                resp = client.get(self.API.format(company=company))
-                resp.raise_for_status()
-                for item in resp.json():
+                try:
+                    resp = client.get(self.API.format(company=company))
+                    resp.raise_for_status()
+                    items = resp.json()
+                except Exception as exc:
+                    logger.warning("lever: slug %r failed (%s); skipping", company, exc)
+                    continue
+                for item in items:
                     categories = item.get("categories", {}) or {}
                     jobs.append(
                         self._job(

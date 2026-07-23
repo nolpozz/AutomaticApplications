@@ -31,6 +31,11 @@ per-posting URL:
 | **YC / Wellfound / LinkedIn** | ⚠️ sample | No free public API / ToS-restricted; sample data by default |
 | **Company career pages** | ⚠️ partial | Auto-delegates to Greenhouse/Lever/Ashby when detected |
 
+Sample data is only ever used in **explicit offline mode** (`job-agent pipeline`
+defaults to `--offline`; boards with no live source also stay offline). In a live
+run (`--no-offline`) a board that errors or returns nothing yields **zero jobs** —
+fictional sample rows are never injected into a real run.
+
 **Centralized ML/AI search.** One `search_queries` list (covering ML engineer, AI
 research, research scientist, applied scientist, NLP, LLMs, computer vision, deep
 learning, MLOps, internships, …) drives every search-based board, so the full
@@ -39,13 +44,43 @@ ML/AI research + engineering role space is searched from one place.
 **LLM layer.** Provider abstraction over **OpenAI (default)**, Anthropic, Gemini,
 Ollama/vLLM, and a deterministic **mock**. Every AI component supplies a
 deterministic fallback, so the pipeline runs and tests reproducibly with no keys,
-and real-provider parse failures degrade gracefully. Prompts are versioned files.
+and real-provider parse failures degrade gracefully. Prompts are versioned files;
+the registry uses the highest version by default. The current résumé and cover-letter
+prompts (`*.v2.txt`) carry an explicit **"write like a plain-spoken human"** style
+guide that bans em dashes, semicolons, and the usual LLM tells ("leverage",
+"passionate about", "cutting-edge", the "not just X, but Y" pattern, …) so generated
+documents don't read as machine-written.
 
 **LLM-based parsing & reproducible classifier.** Extracts structured requirements
-from each posting; scores fit across technical / experience / education / research /
-interest with an overall score, recommendation, and reasons. Supports **role
-targeting** (e.g. prioritize Master's-level internships, down-weight senior
-full-time roles).
+from each posting, then rates fit across five dimensions — technical / experience /
+education / research / interest. The model (or the deterministic heuristic) rates
+each dimension on a **1-100 scale**; it never returns an overall score. Instead
+**the pipeline applies your fixed weights** (`_WEIGHTS`, default technical 0.35 /
+interest 0.25 / experience 0.20 / education 0.10 / research 0.10) to compute the
+overall fit — so the ranking is identical no matter which provider produced the
+ratings, and your weighting always governs. That base fit score then passes through
+a deterministic, fully-configurable ranking pipeline (all off by default):
+
+1. **Role targeting** (`classifier/targeting.py`) — down-weights roles that don't
+   match your desired level/keywords (e.g. penalize senior full-time when you want
+   internships), applied as a multiplier *before* any boost so an off-target role
+   can't be rescued.
+2. **Domain-relevance gate** (`classifier/domain.py`) — multiplies the score down
+   when *none* of your `domain_keywords` (e.g. ML/AI terms) appear in the title,
+   description, or parsed skills, so generic "SWE Intern" listings drop below threshold.
+3. **Company prestige** (`classifier/prestige.py`) — a built-in FAANG+/top-AI-lab and
+   high-growth-startup tier list adds a score bonus (FAANG+ > high-growth) and lets
+   prestigious companies keep more of their roles through the per-company cap.
+4. **Location & title boosts** (`classifier/boost.py`) — small capped bonuses for
+   roles in your `target_locations` or whose title contains a `boost_keyword`.
+
+Every stage is deterministic and shared with **`scripts/rescore.py`**, which
+re-applies the current settings to an already-classified database with **no LLM
+calls** — tune the knobs, re-rank the queue, and off-domain roles that slip below
+threshold are `ARCHIVED` (documents kept) while newly-qualifying ones are surfaced.
+A separate **company blocklist** (`blocked_companies`) drops unwanted employers at
+scrape time, before any embedding or LLM spend. See
+[`docs/setup.md`](docs/setup.md#ranking--targeting-controls) for every knob.
 
 **Retrieval + tailored documents.** Embeddings (mock hashed or
 sentence-transformers) over your knowledge base with SQLite/FAISS vector search;
@@ -65,7 +100,7 @@ semantics.
 
 **Surfaces.** A typer CLI, a local FastAPI dashboard (search / filter / charts), an
 auto-synced Excel workbook (colored by stage, frozen headers, autofilter), analytics,
-and rotating structured logs. Full test suite (**68 tests**), `ruff` / `black` /
+and rotating structured logs. Full test suite (**94 tests**), `ruff` / `black` /
 `mypy` clean, GitHub Actions CI on Python 3.10–3.12.
 
 ---
@@ -178,6 +213,128 @@ For each job you want to pursue:
 
 ---
 
+## What it's tuned for (and how to retune it)
+
+Out of the box the pipeline is tuned for **ML / AI roles broadly** — not
+specifically internships, not any geography, with **no companies blocked**. Every
+one of these is a plain setting you can change. Here is exactly what the defaults do
+and where to change each:
+
+| Aspect | Default behavior | Change it via | Scope |
+|---|---|---|---|
+| **Role domain (ML/AI)** | Searches 16 ML/AI titles (`machine learning engineer`, `ai research`, `research scientist`, `nlp`, `computer vision`, …) on every search board, plus a curated set of AI-lab boards | `pipeline.search_queries` (settings) and `config/sources.yaml` (board tokens) | queries = per-user; `sources.yaml` = **shared** |
+| **Intern focus** | **Off** — full-time *and* intern roles both surface; nothing restricts to interns | `pipeline.target_keywords` (e.g. `intern,co-op`) + `target_experience_levels` (e.g. `internship`); off-target roles are multiplied ×0.5–0.6 | per-user |
+| **Fit weighting** | The LLM rates five dimensions **1-100**; *our code* applies **technical 0.35 · interest 0.25 · experience 0.20 · education 0.10 · research 0.10** to compute the overall score — same weights for every provider, never the model's own | `_WEIGHTS` in `job_agent/classifier/classifier.py` | **shared** (code) |
+| **Geography** | **No effect** (`location_boost: 0.0`). Location never filters anything | `pipeline.target_locations` + `location_boost` — an *additive* nudge only, capped by `boost_cap` (0.1) | per-user |
+| **Company prestige** | **Off** (`prestige_boost: 0.0`). Built-in FAANG+ / high-growth tier lists exist but add nothing until you set a boost | `pipeline.prestige_boost` / `prestige_cap_multiplier`; extend lists via `prestige_extra_*` or edit `classifier/prestige.py` | boost = per-user; built-in lists = **shared** (code) |
+| **Domain gate** | **Off** (`domain_penalty: 1.0`) | `pipeline.domain_keywords` + `domain_penalty` (e.g. `0.5`) — multiplies down roles with no domain keyword | per-user |
+| **Blocked companies** | **None** — no company is blocked | `pipeline.blocked_companies` (word-boundary match, dropped at scrape time). Remove a company by deleting it from that list | per-user |
+
+**So, "how tailored to AI/ML interns is it?"** The *domain* is ML/AI by default (via
+the search queries, curated boards, and prestige lists). The *intern* level is **not**
+enforced by default — turn it on with `target_keywords`/`target_experience_levels`,
+which down-weight (they don't hard-drop) mismatched roles: senior/staff/principal ×0.5,
+other off-target ×0.6. **Geography plays no role at all** unless you opt in, and even
+then it only nudges ranking within the boost cap — it never excludes a job. **No
+companies are blocked** until you add them.
+
+### Per-user vs. shared — changing things without affecting others
+
+The tool is **single-user per checkout**: each person clones the repo and runs their
+own copy. What isolates one user's tailoring from another is *where* the setting lives:
+
+* **Per-user (never committed, never affects anyone else).** Your background in
+  `user_data/`, your keys in `.env`, and any pipeline knob set as an env var
+  (`JOB_AGENT_PIPELINE__TARGET_KEYWORDS=intern,co-op`) or in a **`config/config.yaml`**
+  — all gitignored. Put *all* your personal tailoring (intern focus, locations,
+  blocklist, prestige boost, thresholds) here and it stays yours.
+* **Shared (committed — changing it changes the defaults for everyone).**
+  `config/sources.yaml` (the board list), `DEFAULT_SEARCH_QUERIES` and `_WEIGHTS` in
+  code, and the FAANG+/high-growth lists in `classifier/prestige.py`. Treat edits here
+  as changing the project's shipped defaults, and land them via a normal PR.
+
+So the rule for contributors: **retune your own runs through `.env` / `config/config.yaml`
+/ `user_data/`; only touch the committed files when you intend to move the default for
+the whole team.** Adding a *new* capability (a board, provider, prompt, or ranking
+adjustment) is additive and off-by-default — see [`docs/extending.md`](docs/extending.md)
+— so a new feature ships dormant and only affects a user once they enable it.
+
+See [`docs/setup.md`](docs/setup.md#ranking--targeting-controls) for every knob and its
+default.
+
+---
+
+## Adding companies & startups
+
+Job *sources* live in **`config/sources.yaml`** — separate from the ranking knobs
+above. A company reaches the pipeline one of four ways:
+
+1. **Supported ATS (easiest).** If the company posts through **Greenhouse, Lever, or
+   Ashby**, adding it is a one-line *slug* — no code. Drop the slug under the right
+   board in `sources.yaml` and it goes live on the next `--no-offline` run.
+2. **Workday.** Add a `host` / `tenant` / `site` target under the `workday` board
+   (see the NVIDIA entry in `sources.yaml`).
+3. **GitHub aggregators.** Big employers with custom sites (Apple, Meta, Microsoft)
+   still surface here because their roles appear in the aggregator lists already
+   enabled under the `github` board — no per-company config needed.
+4. **Custom adapter.** For a live, direct feed from a company that runs its own
+   careers site with no public API, add a scraper (see
+   [`docs/extending.md`](docs/extending.md#add-a-job-board)).
+
+**Finding & verifying a slug.** A wrong slug is harmless — it just returns zero jobs
+(fails gracefully) — so it's safe to try. Confirm one by opening the board URL (a live
+page with jobs = good slug):
+
+| ATS | Board URL to check | Add under |
+|---|---|---|
+| Greenhouse | `https://boards.greenhouse.io/<slug>` | `greenhouse.slugs` |
+| Lever | `https://jobs.lever.co/<slug>` | `lever.slugs` |
+| Ashby | `https://jobs.ashbyhq.com/<slug>` | `ashby.slugs` |
+
+```yaml
+# config/sources.yaml
+sources:
+  greenhouse:
+    slugs: [anthropic, duolingo]      # add verified slugs here
+  ashby:
+    slugs: [openai, cohere, elevenlabs]
+```
+
+> **Shared file.** `config/sources.yaml` is committed, so editing it changes the
+> board list for **everyone** — land changes via a PR. (Personal, non-shared board
+> lists aren't wired up yet; today, tailor sources through this shared file.)
+
+### Target list
+
+A worklist of companies to bring in, with where to look first. **Verify each slug**
+with the check above before relying on it — the exact token often differs from the
+brand name (hyphens, `-ai` suffixes, legal names).
+
+| Company | Status / where to add |
+|---|---|
+| **Cohere** | ✅ live — Ashby (`cohere`), already in `sources.yaml` |
+| **NVIDIA** | ✅ live — Workday target, already in `sources.yaml` |
+| **Apple** | Custom site — arrives via the GitHub aggregators; a direct feed needs a custom adapter |
+| **Perplexity** | Check Ashby first, then Greenhouse → `ashby`/`greenhouse.slugs` |
+| **ElevenLabs** | Check Ashby first → `ashby.slugs` |
+| **Sierra** | Check Ashby / Greenhouse → `ashby`/`greenhouse.slugs` |
+| **Decagon** | Check Ashby / Greenhouse → `ashby`/`greenhouse.slugs` |
+| **Goodfire AI** | Check Ashby / Greenhouse → `ashby`/`greenhouse.slugs` |
+| **Distyl AI** | Check Ashby / Greenhouse → `ashby`/`greenhouse.slugs` |
+| **EliseAI** | Check Greenhouse first → `greenhouse.slugs` |
+| **DeepL** | Check Greenhouse first → `greenhouse.slugs` |
+| **Jumpspeak** | Check Lever / Ashby → `lever`/`ashby.slugs` |
+| **Duolingo** | Check Greenhouse first → `greenhouse.slugs` |
+| **Airbnb** | Check Greenhouse first → `greenhouse.slugs` |
+| **Pinterest** | Check Greenhouse first → `greenhouse.slugs` |
+
+Once added, run `job-agent pipeline --no-offline` (or just `job-agent scrape`) and
+check `job-agent boards` to confirm the source is enabled. A company that returns no
+jobs either uses a different ATS (try another platform above) or runs a custom site
+(paths 3–4).
+
+---
+
 ## CLI
 
 | Command | What it does |
@@ -195,19 +352,25 @@ For each job you want to pursue:
 Automated stages are resumable — re-running only processes jobs that still need
 that stage; a job that fails a stage stays put and is retried next run.
 
+**Helper scripts** (`scripts/`): `seed_user_data.sh` (copy the persona template),
+`reset.sh` (wipe `data/` and start fresh), `demo.sh` (end-to-end offline demo), and
+`python3 scripts/rescore.py` — re-apply the current targeting/domain/prestige/boost
+settings to an already-classified database **with no LLM calls**, so you can tune
+ranking knobs and re-rank the queue without re-scraping or re-generating documents.
+
 ---
 
 ## How it fits together
 
 ```
- boards ──> Scrapers ──> [Job] ──> Dedupe ──> SQLite (source of truth)
-                                                   │
-   ┌───────────────────────────────────────────────┤  Orchestrator (state machine)
-   ▼            ▼            ▼             ▼          ▼
- Parser ──> Embeddings ──> Classifier ──> Retrieval ──> Resume + Cover-letter gens
- (LLM)       (vectors)      (LLM, fit)     (top-k)        (LLM, real material only)
-                                                   │
-                                                   ▼
+ boards ─> Scrapers ─> [Job] ─> Blocklist ─> Dedupe ─> SQLite (source of truth)
+                                                          │
+   ┌──────────────────────────────────────────────────────┤  Orchestrator (state machine)
+   ▼            ▼               ▼            ▼             ▼          ▼
+ Embeddings ─> Rank/cap ────> Parser ───> Classifier ─> Retrieval ─> Resume + Cover-letter gens
+ (vectors)  (top-N/company)   (LLM)      (LLM, fit +     (top-k)      (LLM, real material only)
+                                          ranking chain)     │
+                                                             ▼
                               Excel sync · Analytics · Dashboard · Tracker
 ```
 

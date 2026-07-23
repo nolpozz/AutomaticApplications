@@ -53,6 +53,11 @@ class ScraperConfig:
 
 class AbstractScraper(abc.ABC):
     source: str = "base"
+    # Slug/URL-based boards (greenhouse, ashby, lever, github) need a configured
+    # target to go live. Search-based boards (amazon, spotify, netflix, google)
+    # and target-based boards (workday) set this False so they fetch live even
+    # without slugs — their targets live in ``extra`` (queries / targets).
+    requires_slugs: bool = True
 
     def __init__(self, config: ScraperConfig) -> None:
         self.config = config
@@ -67,18 +72,20 @@ class AbstractScraper(abc.ABC):
     # -- orchestration ------------------------------------------------------
     def fetch(self) -> list[Job]:
         jobs: list[Job]
-        use_live = not self.config.offline and (self.config.slugs or self.config.urls)
-        if use_live:
+        if self.config.offline:
+            # Explicit demo/offline mode: deterministic sample data only.
+            jobs = self._sample()
+        elif self.config.slugs or self.config.urls or not self.requires_slugs:
+            # Live mode. On failure return nothing — never inject fictional
+            # sample jobs into a real run.
             try:
                 jobs = self._fetch_live()
-                if not jobs:
-                    logger.info("%s: live fetch returned no jobs; using sample", self.source)
-                    jobs = self._sample()
             except Exception as exc:
-                logger.warning("%s: live fetch failed (%s); using sample", self.source, exc)
-                jobs = self._sample()
+                logger.warning("%s: live fetch failed (%s)", self.source, exc)
+                jobs = []
         else:
-            jobs = self._sample()
+            # Live mode but nothing configured to fetch (e.g. no slugs).
+            jobs = []
         deduped = _dedupe_within(jobs)
         capped = deduped[: self.config.max_jobs]
         logger.info("%s: yielded %d jobs", self.source, len(capped))

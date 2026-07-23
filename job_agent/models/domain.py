@@ -148,6 +148,9 @@ class ClassifierScore(BaseModel):
     interest_match: float = 0.0
     interview_probability: float = 0.0
     overall_score: float = 0.0
+    # Pre-adjustment score (before level/domain/prestige/boost). Lets the offline
+    # re-score recompute adjustments from a stable base. None for older records.
+    base_score: float | None = None
     recommendation: Recommendation = Recommendation.MAYBE
     reasons: list[str] = Field(default_factory=list)
 
